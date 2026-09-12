@@ -42,18 +42,18 @@ class VectorDataBase:
         
         
         
-    def search_embeddings(self, asset_id: str, query_vector: List[float], top_k: int = 5):
+    def search_embeddings(self, asset_id: str, query_vector, top_k: int = 5):
         collection_name = f"asset_{asset_id}"
 
         if not self.qdrant.collection_exists(collection_name):
             print(f"No collection found for asset '{asset_id}'.")
             return []
 
-        results = self.qdrant.search(
+        results = self.qdrant.query_points(
             collection_name=collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
-        )
+        ).points
 
         return [
             {
@@ -63,6 +63,6 @@ class VectorDataBase:
             }
             for hit in results
         ]
-        
+            
                 
                 
