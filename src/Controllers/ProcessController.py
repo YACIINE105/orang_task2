@@ -3,66 +3,70 @@ from dataclasses import dataclass
 from typing import List
 
 
-
 @dataclass
 class Document:
     page_content: str
-    metadata : dict
+    metadata: dict
 
 
 class ProcessController:
     def __init__(self):
         pass
-    
+
     def get_loader(self, file_path):
         mu = PyMuPDFLoader(file_path)
         loader = mu.load()
         if not loader:
             return None
         return loader
-    
+
     def process_text(self, file_path):
         docs = self.get_loader(file_path=file_path)
-        
+
         file_content = [content.page_content for content in docs]
-        file_content_metadata = [content.metadata for content in docs]  
+        file_content_metadata = [content.metadata for content in docs]
         chunks = self.process_simple_splitter(texts=file_content, metadatas=file_content_metadata)
 
         return chunks
-    
-    def process_simple_splitter(self, texts:List[str], metadatas:List[dict], chunk_size:int=300, splitter_tag:str="\n \n"):
+
+    def process_simple_splitter(self, texts: List[str], metadatas: List[dict], chunk_size: int = 1000, splitter_tag: str = "\n\n"):
         full_text = "".join(texts)
-        
-        lines = [doc.strip() for doc in full_text.split(splitter_tag) if len(doc.strip()) > 1] 
+
+        lines = [doc.strip() for doc in full_text.split(splitter_tag) if len(doc.strip()) > 1]
 
         chunks = []
         current_chunk = ""
-        
+
         for line in lines:
+            # if a single line is itself bigger than chunk_size, force-slice it
+            if len(line) > chunk_size:
+                # flush whatever's pending first
+                if current_chunk:
+                    chunks.append(Document(page_content=current_chunk.strip(), metadata={}))
+                    current_chunk = ""
+
+                for i in range(0, len(line), chunk_size):
+                    piece = line[i:i + chunk_size]
+                    chunks.append(Document(page_content=piece.strip(), metadata={}))
+                continue
+
             current_chunk += line + splitter_tag
-            
+
             if len(current_chunk) >= chunk_size:
-                
-                chunks.append(Document(page_content=current_chunk.strip(), 
-                                       metadata={}))
+                chunks.append(Document(page_content=current_chunk.strip(), metadata={}))
                 current_chunk = ""
-                
-                
-        if len(current_chunk) > 0 :
-                        
-                        chunks.append(Document(page_content=current_chunk.strip(), 
-                                               metadata={}))
-                        
-        return chunks  
+
+        if len(current_chunk) > 0:
+            chunks.append(Document(page_content=current_chunk.strip(), metadata={}))
+
+        return chunks
 
 
-
-
-if __name__=='__main__':
+if __name__ == '__main__':
     pro = ProcessController()
     file_path = "/home/yacine_105/orange_tasks/task2/NLP_0.5.pdf"
     chunks = pro.process_text(file_path=file_path)
-    print(chunks)
-    
+    print(f"Total chunks: {len(chunks)}")
+    print(f"Max chunk length: {max(len(c.page_content) for c in chunks)}")
     
     
