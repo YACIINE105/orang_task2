@@ -16,9 +16,11 @@ generation_client = OpenAIGenerationProvider()
 
 file_path = "/home/yacine_105/orange_tasks/task2/NLP_0.5.pdf"
 chunks = pro.process_text(file_path=file_path)
+print(f"Total chunks: {len(chunks)}")
+print(f"Max chunk length: {max(len(c.page_content) for c in chunks)}")
 
 asset_id = input("Enter asset id: ").strip()
-query = input("Enter search query: ").strip()
+
 
 inserted_ids = mongo.store_chunks_for_asset(asset_id=asset_id, chunks=chunks)
 
@@ -28,10 +30,17 @@ else:
     embeddings = embeddings_client.get_embeddings_for_chunks(chunks=chunks)
     qdrant.store_embeddings_for_asset(asset_id=asset_id, chunks=chunks, embeddings=embeddings)
 
-query_vector = embeddings_client.embed_query(query=query)
+while True:
+    print("#######################    welcome to the minimal rag system    #######################")
+    
+    query = input("Enter a search query: ").strip()
+    if query.lower() in ("exit", "q"):
+        break
+    query_vector = embeddings_client.embed_query(query=query)
 
-results = qdrant.search_embeddings(asset_id, query_vector, top_k=5)
+    results = qdrant.search_embeddings(asset_id, query_vector, top_k=5)
 
-answer = generation_client.generate_text(query=query, search_results=results)
-print(f"Assistant: {answer}")
+    answer = generation_client.generate_text(query=query, search_results=results)
+    print("\n\n", f"Assistant: {answer}")
+
 
