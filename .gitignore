@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .env
 *.pdf
+/env
+
+/docker/env/.env.*
