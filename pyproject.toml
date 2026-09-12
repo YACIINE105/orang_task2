@@ -1,0 +1,24 @@
+[project]
+name = "task2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "YACIINE 105", email = "mooml.intern@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-community>=0.4.2",
+    "langchain-openai>=1.6.2",
+    "pymongo>=4.18.1",
+    "pymupdf>=1.28.2",
+    "python-dotenv>=1.2.3",
+    "qdrant-client>=1.19.0",
+]
+
+[project.scripts]
+task2 = "task2:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
