@@ -21,26 +21,25 @@ class OpenAIGenerationProvider:
         return llm
 
     def prepare_query(self, query: str, search_results: List[dict], system_prompt: Optional[str] = None):
-        """
-        Builds the message list: system prompt + context from top search results
-        + prior chat history + the new user query.
-        """
         context_text = "\n\n".join(
             f"[{i+1}] {result['text']}" for i, result in enumerate(search_results)
         )
 
-        default_system_prompt = (
-            "You are a helpful assistant. Use the following context to answer "
-            "the user's question. If the context doesn't contain the answer, say so.\n\n"
-            f"Context:\n{context_text}"
-        )
+        default_system_prompt = f"""You are a knowledgeable assistant that answers questions using ONLY the provided context below.
+
+    Guidelines:
+    - Base your answer strictly on the context. Do not use outside knowledge or make assumptions beyond what's given.
+    - If the context is insufficient to answer the question, say so clearly instead of guessing.
+    - Reference specific sources using their number (e.g. "[1]") when citing information.
+    - Be concise but complete — prefer clear structure (bullet points, short paragraphs) over long unbroken text.
+    - If multiple context passages disagree or are ambiguous, point that out rather than silently picking one.
+    - Do not mention "the context" or "the provided text" explicitly in your answer — just answer naturally as if you know this.
+
+    Context:
+    {context_text}"""
 
         messages = [SystemMessage(content=system_prompt or default_system_prompt)]
-
-        # add prior conversation turns
         messages.extend(self.chat_history)
-
-        # add the new user query
         messages.append(HumanMessage(content=query))
 
         return messages
