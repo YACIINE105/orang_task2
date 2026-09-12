@@ -15,6 +15,8 @@ class OpenAIEmbeddingProvider:
             model=os.getenv("EMBEDDING_MODEL_ID"),
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
+            check_embedding_ctx_length=False,
+            model_kwargs={"encoding_format": "float"},
         )
 
     def embed_text(self, texts: List[str], batch_size: int = 100):
