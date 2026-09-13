@@ -1,24 +1,23 @@
 from pymongo import MongoClient
 
-from Controllers.ProcessController import ProcessController
-
 
 class DataBase:
 
     def __init__(self, db_name):
-        
         self.client = MongoClient("mongodb://localhost:27017/")
         self.db = self.client[db_name]
 
+    # ------------------------------------------------------------------
+    # Chunks
+    # ------------------------------------------------------------------
     def store_chunks_for_asset(self, asset_id, chunks):
         collection_name = f"asset_{asset_id}"
 
         # Check if this collection already exists in the DB
         if collection_name in self.db.list_collection_names():
             print(f"Asset '{asset_id}' already stored — skipping.")
-            return self.db[collection_name]
+            return None  # nothing was inserted
 
-        # Doesn't exist yet — create it by inserting the chunks
         collection = self.db[collection_name]
 
         chunk_docs = [
@@ -31,12 +30,27 @@ class DataBase:
             for i, chunk in enumerate(chunks)
         ]
 
-        collection.insert_many(chunk_docs)
+        result = collection.insert_many(chunk_docs)
         print(f"Stored {len(chunk_docs)} chunks for asset '{asset_id}'.")
-        return collection
+        return result.inserted_ids
+
+    # ------------------------------------------------------------------
+    # Chat history (keyed by asset_id)
+    # ------------------------------------------------------------------
+    def save_chat_history(self, asset_id: str, history: list[dict]):
+        self.db["chat_history"].update_one(
+            {"asset_id": asset_id},
+            {"$set": {"history": history}},
+            upsert=True,
+        )
+
+    def get_chat_history(self, asset_id: str) -> list[dict]:
+        doc = self.db["chat_history"].find_one({"asset_id": asset_id})
+        return doc["history"] if doc else []
 
 
 if __name__ == "__main__":
     asset_id = input("Enter asset id: ").strip()
     # chunks = your_chunking_function(...)  # your existing chunking logic
     # store_chunks_for_asset(asset_id, chunks)
+    
