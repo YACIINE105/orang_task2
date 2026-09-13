@@ -14,7 +14,7 @@ qdrant = VectorDataBase(vector_size=os.getenv("EMBEDDING_MODEL_DIM"))
 embeddings_client = OpenAIEmbeddingProvider()
 generation_client = OpenAIGenerationProvider()
 
-file_path = "/home/yacine_105/orange_tasks/task2/NLP_0.5.pdf"
+file_path = "/home/yacine_105/orange_tasks/task2/Sherlock Internship Challenge.pdf"
 chunks = pro.process_text(file_path=file_path)
 print(f"Total chunks: {len(chunks)}")
 print(f"Max chunk length: {max(len(c.page_content) for c in chunks)}")
@@ -24,7 +24,7 @@ asset_id = input("Enter asset id: ").strip()
 
 inserted_ids = mongo.store_chunks_for_asset(asset_id=asset_id, chunks=chunks)
 
-if inserted_ids is None:
+if inserted_ids is not None:
     print("Skipping embedding step (Mongo insert didn't happen).")
 else:
     embeddings = embeddings_client.get_embeddings_for_chunks(chunks=chunks)
