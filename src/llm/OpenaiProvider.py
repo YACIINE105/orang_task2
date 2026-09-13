@@ -42,6 +42,8 @@ class OpenAIGenerationProvider:
         messages.extend(self.chat_history)
         messages.append(HumanMessage(content=query))
 
+        print("\n\n####################################\n\n", context_text, "\n\n####################################\n\n")
+        
         return messages
 
     def generate_text(self, query: str, search_results: List[dict], system_prompt: Optional[str] = None):
@@ -53,7 +55,8 @@ class OpenAIGenerationProvider:
         # update chat history with this turn
         self.chat_history.append(HumanMessage(content=query))
         self.chat_history.append(AIMessage(content=response.content))
-
+        # print("##################################\n", self.chat_history, "\n##################################")
+      
         return response.content
 
     def clear_history(self):
