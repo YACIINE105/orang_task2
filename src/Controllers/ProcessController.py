@@ -16,6 +16,7 @@ class ProcessController:
         pass
 
     def get_loader(self, file_path:str):
+        
         if file_path.lower().endswith((".xlsx", ".xls")):
             return self.load_excel(file_path)
 
@@ -38,13 +39,18 @@ class ProcessController:
     
 
     def process_text(self, file_path):
-        docs = self.get_loader(file_path=file_path)
-
-        file_content = [content.page_content for content in docs]
-        file_content_metadata = [content.metadata for content in docs]
-        chunks = self.process_simple_splitter(texts=file_content, metadatas=file_content_metadata)
-
+        
+        if file_path.lower().endswith((".xlsx", ".xls")):
+            chunks = self.load_excel(file_path)
+            
+        else:
+            docs = self.get_loader(file_path=file_path)
+            file_content = [content.page_content for content in docs]
+            file_content_metadata = [content.metadata for content in docs]
+            chunks = self.process_simple_splitter(texts=file_content, metadatas=file_content_metadata)
+            
         return chunks
+
 
     def process_simple_splitter(self, texts: List[str], metadatas: List[dict], chunk_size: int = 1000, splitter_tag: str = "\n\n"):
         full_text = "".join(texts)
