@@ -20,14 +20,18 @@ class VectorDataBase:
         """
         qdrant_collection = f"asset_{asset_id}"
 
-        self.qdrant.create_collection(
-            collection_name=qdrant_collection,
-            vectors_config=VectorParams(size=self.VECTOR_SIZE, distance=Distance.COSINE),
-        )
+        if not self.qdrant.collection_exists(qdrant_collection):
+            self.qdrant.create_collection(
+                collection_name=qdrant_collection,
+                vectors_config=VectorParams(size=self.VECTOR_SIZE, distance=Distance.COSINE),
+            )
+
+        # get current point count so new IDs don't collide with existing ones
+        existing_count = self.qdrant.count(collection_name=qdrant_collection).count
 
         points = [
             PointStruct(
-                id=i,
+                id=existing_count + i,
                 vector=embedding,
                 payload={
                     "text": chunk.page_content,
@@ -39,7 +43,7 @@ class VectorDataBase:
 
         self.qdrant.upsert(collection_name=qdrant_collection, points=points)
         print(f"Stored {len(points)} embeddings for asset '{asset_id}' in Qdrant.")
-        
+            
         
         
     def search_embeddings(self, asset_id: str, query_vector, top_k: int = 5):
