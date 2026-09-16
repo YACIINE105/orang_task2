@@ -1,6 +1,8 @@
 from langchain_community.document_loaders import PyMuPDFLoader
 from dataclasses import dataclass
 from typing import List
+import pandas as pd
+from langchain_core.documents import Document
 
 
 @dataclass
@@ -13,12 +15,27 @@ class ProcessController:
     def __init__(self):
         pass
 
-    def get_loader(self, file_path):
+    def get_loader(self, file_path:str):
+        if file_path.lower().endswith((".xlsx", ".xls")):
+            return self.load_excel(file_path)
+
         mu = PyMuPDFLoader(file_path)
-        loader = mu.load()
-        if not loader:
+        docs = mu.load()
+        if not docs:
             return None
-        return loader
+        return docs
+    
+    
+    def load_excel(self, file_path: str):
+        xls = pd.ExcelFile(file_path)
+        docs = []
+        for sheet_name in xls.sheet_names:
+            df = xls.parse(sheet_name)
+            for i, row in df.iterrows():
+                content = "\n".join(f"{col}: {val}" for col, val in row.items() if pd.notna(val))
+                docs.append(Document(page_content=content, metadata={"source": file_path, "sheet": sheet_name, "row": i}))
+        return docs
+    
 
     def process_text(self, file_path):
         docs = self.get_loader(file_path=file_path)

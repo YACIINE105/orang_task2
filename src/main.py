@@ -45,7 +45,7 @@ while True:
     query_vector = embeddings_client.embed_query(query=query)
     results = qdrant.search_embeddings(asset_id, query_vector, top_k=5)
 
-    answer = generation_client.generate_text(asset_id=asset_id, query=query, search_results=results)
+    answer = generation_client.generate_text(asset_id=asset_id, query=query, search_results=results, verbose=False)
     print("\n\n", f"Assistant: {answer}")
 
 
