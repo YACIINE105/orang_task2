@@ -29,7 +29,7 @@ else:
     embeddings = embeddings_client.get_embeddings_for_chunks(chunks=chunks)
     qdrant.store_embeddings_for_asset(asset_id=asset_id, chunks=chunks, embeddings=embeddings)
 
-# --- Restore prior chat history for this asset, if any ---
+
 stored_history = mongo.get_chat_history(asset_id=asset_id)
 if stored_history:
     generation_client.load_history_from_dicts(asset_id, stored_history)
@@ -48,7 +48,7 @@ while True:
     answer = generation_client.generate_text(asset_id=asset_id, query=query, search_results=results)
     print("\n\n", f"Assistant: {answer}")
 
-    # --- Persist updated history after every turn ---
+
     mongo.save_chat_history(asset_id=asset_id, history=generation_client.export_history(asset_id))
     
     

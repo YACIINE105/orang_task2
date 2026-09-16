@@ -31,7 +31,7 @@ class OpenAIGenerationProvider:
         self.max_turns = max_turns
 
     # ------------------------------------------------------------------
-    # History management (per asset_id)
+    # History management (by asset_id)
     # ------------------------------------------------------------------
     def _get_history(self, asset_id: str) -> List[BaseMessage]:
         return self.sessions.setdefault(asset_id, [])

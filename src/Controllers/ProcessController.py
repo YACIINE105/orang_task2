@@ -38,9 +38,9 @@ class ProcessController:
         current_chunk = ""
 
         for line in lines:
-            # if a single line is itself bigger than chunk_size, force-slice it
+
             if len(line) > chunk_size:
-                # flush whatever's pending first
+
                 if current_chunk:
                     chunks.append(Document(page_content=current_chunk.strip(), metadata={}))
                     current_chunk = ""
