@@ -11,7 +11,7 @@ class DataBase:
     # Chunks
     # ------------------------------------------------------------------
     def store_chunks_for_asset(self, asset_id, chunks):
-        collection_name = f"asset_{asset_id}"
+        collection_name = f"chunks_of_assets_{asset_id}"
 
         # Check if this collection already exists in the DB
         if collection_name in self.db.list_collection_names():
