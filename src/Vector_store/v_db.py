@@ -10,8 +10,7 @@ class VectorDataBase:
     
         self.qdrant = QdrantClient(host="localhost", port=6333)
 
-        self.VECTOR_SIZE = vector_size  # match your embedding model's output dim
-
+        self.VECTOR_SIZE = vector_size  
 
     def store_embeddings_for_asset(self, asset_id, chunks: List, embeddings: List[List[float]]):
         """
@@ -26,7 +25,7 @@ class VectorDataBase:
                 vectors_config=VectorParams(size=self.VECTOR_SIZE, distance=Distance.COSINE),
             )
 
-        # get current point count so new IDs don't collide with existing ones
+
         existing_count = self.qdrant.count(collection_name=qdrant_collection).count
 
         points = [

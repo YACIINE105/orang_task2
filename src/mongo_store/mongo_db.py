@@ -13,10 +13,9 @@ class DataBase:
     def store_chunks_for_asset(self, asset_id, chunks):
         collection_name = f"chunks_of_assets_{asset_id}"
 
-        # Check if this collection already exists in the DB
         if collection_name in self.db.list_collection_names():
             print(f"Asset '{asset_id}' already stored — skipping.")
-            return None  # nothing was inserted
+            return None  
 
         collection = self.db[collection_name]
 
@@ -51,6 +50,4 @@ class DataBase:
 
 if __name__ == "__main__":
     asset_id = input("Enter asset id: ").strip()
-    # chunks = your_chunking_function(...)  # your existing chunking logic
-    # store_chunks_for_asset(asset_id, chunks)
-    
+

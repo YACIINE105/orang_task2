@@ -25,7 +25,7 @@ class OpenAIEmbeddingProvider:
 
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            batch_embeddings = client.embed_documents(batch)  # LangChain's method
+            batch_embeddings = client.embed_documents(batch)  
             all_embeddings.extend(batch_embeddings)
             print(f"Embedded {i + len(batch)}/{len(texts)}")
 
@@ -37,5 +37,6 @@ class OpenAIEmbeddingProvider:
 
     def embed_query(self, query: str):
         client = self.get_embedding_provider()
-        return client.embed_query(query)  # single-text embedding, for search queries
+        return client.embed_query(query)  
+    
     

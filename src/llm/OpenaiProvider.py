@@ -27,7 +27,7 @@ class OpenAIGenerationProvider:
         max_turns: number of non-system messages (Human/AI) to keep per asset.
                    The system message is rebuilt fresh every turn and doesn't count.
         """
-        self.sessions: Dict[str, List[BaseMessage]] = {}  # asset_id -> history
+        self.sessions: Dict[str, List[BaseMessage]] = {}  
         self.max_turns = max_turns
 
     # ------------------------------------------------------------------
@@ -93,9 +93,7 @@ class OpenAIGenerationProvider:
     ) -> List[BaseMessage]:
         history = self._get_history(asset_id)
 
-        # Drop any existing system message and reinsert a fresh one so the
-        # model always sees the latest retrieved context, not a stale one
-        # from an earlier turn.
+
         history = [m for m in history if not isinstance(m, SystemMessage)]
         history.insert(0, SystemMessage(content=self.build_system_prompt(search_results, system_prompt)))
         history.append(HumanMessage(content=query))
