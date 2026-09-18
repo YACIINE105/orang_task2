@@ -14,7 +14,7 @@ qdrant = VectorDataBase(vector_size=os.getenv("EMBEDDING_MODEL_DIM"))
 embeddings_client = OpenAIEmbeddingProvider()
 generation_client = OpenAIGenerationProvider(max_turns=10)
 
-file_path = "/home/yacine_105/orange_tasks/task2/sample_data.xlsx"
+file_path = "/home/yacine_105/orange_tasks/task2/Sherlock Internship Challenge.pdf"
 chunks = pro.process_text(file_path=file_path)
 print(f"Total chunks: {len(chunks)}")
 print(f"Max chunk length: {max(len(c.page_content) for c in chunks)}")
