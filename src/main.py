@@ -10,7 +10,7 @@ load_dotenv()
 
 pro = ProcessController()
 mongo = DataBase(db_name=os.getenv("DB_NAME"))
-qdrant = VectorDataBase(vector_size=os.getenv("EMBEDDING_MODEL_DIM"))
+qdrant = VectorDataBase(vector_size=int(os.getenv("EMBEDDING_MODEL_DIM")))
 embeddings_client = OpenAIEmbeddingProvider()
 generation_client = OpenAIGenerationProvider(max_turns=10)
 
