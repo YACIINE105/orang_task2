@@ -17,6 +17,18 @@ Guidelines:
 - If multiple context passages disagree or are ambiguous, point that out rather than silently picking one.
 - Do not mention "the context" or "the provided text" explicitly in your answer — just answer naturally as if you know this."""
 
+INTENT_PROMPT = """Classify the request below as exactly one word: question, report, or email.
+- question: the user wants an answer
+- report: the user wants a report or document generated
+- email: the user wants something sent by email
+Reply with the single word only.
+
+Request: {query}"""
+
+SUMMARY_PROMPT = """Summarize the answer to the request below using the context. Keep it short and cite sources like [1].
+
+Request: {query}"""
+
 _ROLE_TO_CLASS = {"system": SystemMessage, "human": HumanMessage, "ai": AIMessage}
 _CLASS_TO_ROLE = {SystemMessage: "system", HumanMessage: "human", AIMessage: "ai"}
 
@@ -131,4 +143,17 @@ class OpenAIGenerationProvider:
         return response.content
     
     
-    
+    def llm_for_agent(self, query:str):
+        llm = self.get_generation_provider()
+        message = query
+        response = llm.invoke(message)
+        return response.content
+
+
+    def prepare_query_for_agent(self, query: str, summary: bool = False, intention: bool = False) -> str:
+        if summary:
+            return SUMMARY_PROMPT.format(query=query)
+        if intention:
+            return INTENT_PROMPT.format(query=query)
+        
+        return query
