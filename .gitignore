@@ -9,3 +9,4 @@ __pycache__/
 /pdfs/*.pdf
 src/tts/_kokoro_patched/
 /*.wav
+models/
