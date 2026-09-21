@@ -7,3 +7,5 @@ __pycache__/
 
 /docker/env/.env.*
 /pdfs/*.pdf
+src/tts/_kokoro_patched/
+/*.wav
