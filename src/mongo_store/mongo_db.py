@@ -10,19 +10,18 @@ class DataBase:
     # ------------------------------------------------------------------
     # Chunks
     # ------------------------------------------------------------------
-    def store_chunks_for_asset(self, asset_id, chunks):
+    def store_chunks_for_asset(self, asset_id, chunks, source_path=None):
         collection_name = f"chunks_of_assets_{asset_id}"
-
-        if collection_name in self.db.list_collection_names():
-            print(f"Asset '{asset_id}' already stored — skipping.")
-            return None  
-
         collection = self.db[collection_name]
+
+        if source_path and collection.find_one({"source": source_path}):
+            print(f"Asset '{asset_id}' / file '{source_path}' already stored — skipping.")
+            return None
 
         chunk_docs = [
             {
                 "text": chunk.page_content,
-                "source": chunk.metadata.get("source"),
+                "source": chunk.metadata.get("source", source_path),
                 "page": chunk.metadata.get("page"),
                 "chunk_index": i,
             }
@@ -30,7 +29,7 @@ class DataBase:
         ]
 
         result = collection.insert_many(chunk_docs)
-        print(f"Stored {len(chunk_docs)} chunks for asset '{asset_id}'.")
+        print(f"Stored {len(chunk_docs)} chunks for asset '{asset_id}' / file '{source_path}'.")
         return result.inserted_ids
 
     # ------------------------------------------------------------------

@@ -52,7 +52,7 @@ class ProcessController:
         return chunks
 
 
-    def process_simple_splitter(self, texts: List[str], metadatas: List[dict], chunk_size: int = 1000, splitter_tag: str = "\n\n"):
+    def process_simple_splitter(self, texts: List[str], metadatas: List[dict], chunk_size: int = 400, splitter_tag: str = "\n"):
         full_text = "".join(texts)
 
         lines = [doc.strip() for doc in full_text.split(splitter_tag) if len(doc.strip()) > 1]
