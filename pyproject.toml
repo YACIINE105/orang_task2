@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "langchain-community>=0.4.2",
     "langchain-openai>=1.6.2",
+    "langgraph>=1.2.11",
     "openpyxl",
     "pandas",
     "pymongo>=4.18.1",
@@ -18,6 +19,6 @@ dependencies = [
     "qdrant-client>=1.19.0",
 ]
 
-[build-system]
-requires = ["uv_build>=0.12.10,<0.13.0"]
-build-backend = "uv_build"
+
+[tool.uv]
+package = false
