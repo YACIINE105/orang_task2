@@ -1,43 +1,50 @@
-
 import os
 from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-os.environ.setdefault("HF_HOME", str(PROJECT_ROOT / "models" / "hf"))
-
+from typing import Optional, Dict, Any, Union
 import torch
 from qwen_asr import Qwen3ASRModel
 
-_model = None
 
+class QwenASRProvider:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-def get_model():
-    """Lazy-load: only builds the model once per process, reuses after."""
-    global _model
-    if _model is not None:
-        return _model
+    def __init__(self, model_name: str = "Qwen/Qwen3-ASR-0.6B"):
+        self.project_root = Path(__file__).resolve().parents[2]
+        self.hf_cache = self.project_root / "models" / "hf"
+        
+        # Check if local snapshot directory exists
+        snapshot_dir = list(self.hf_cache.glob("hub/models--Qwen--Qwen3-ASR-0.6B/snapshots/*"))
+        if snapshot_dir:
+            self.model_name = str(snapshot_dir[0])
+        else:
+            self.model_name = model_name
 
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        self._model: Optional[Qwen3ASRModel] = None
 
-    _model = Qwen3ASRModel.from_pretrained(
-        "Qwen/Qwen3-ASR-0.6B",
-        dtype=dtype,
-        device_map=device,
-    )
-    return _model
+    def get_model(self) -> Qwen3ASRModel:
+        """Lazy-loads the ASR model on first invocation."""
+        if self._model is not None:
+            return self._model
 
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-def transcribe(audio_path: str) -> str:
-    """Transcribe an audio file to text. Returns the recognized text only."""
-    model = get_model()
-    results = model.transcribe(audio=audio_path)
-    return results[0].text
+        self._model = Qwen3ASRModel.from_pretrained(
+            self.model_name,
+            dtype=dtype,
+            device_map=device,
+        )
+        return self._model
 
+    def transcribe(self, audio_path: Union[str, Path]) -> str:
+        """Transcribe an audio file to text. Returns transcription text only."""
+        model = self.get_model()
+        results = model.transcribe(audio=str(audio_path))
+        return results[0].text
 
-def transcribe_with_language(audio_path: str) -> dict:
-    """Same as transcribe(), but also returns detected language."""
-    model = get_model()
-    results = model.transcribe(audio=audio_path)
-    return {"language": results[0].language, "text": results[0].text}
-
+    def transcribe_with_language(self, audio_path: Union[str, Path]) -> Dict[str, Any]:
+        """Transcribe an audio file and return detected language along with text."""
+        model = self.get_model()
+        results = model.transcribe(audio=str(audio_path))
+        return {"language": results[0].language, "text": results[0].text}
+    
