@@ -1,50 +1,81 @@
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any, Union
-import torch
-from qwen_asr import Qwen3ASRModel
+from typing import Dict, Any, Union
+import httpx
 
 
 class QwenASRProvider:
-    PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-    def __init__(self, model_name: str = "Qwen/Qwen3-ASR-0.6B"):
-        self.project_root = Path(__file__).resolve().parents[2]
-        self.hf_cache = self.project_root / "models" / "hf"
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8001/v1",
+        model_name: str = "Qwen/Qwen3-ASR-0.6B",
+        timeout: float = 30.0,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.model_name = model_name
         
-        # Check if local snapshot directory exists
-        snapshot_dir = list(self.hf_cache.glob("hub/models--Qwen--Qwen3-ASR-0.6B/snapshots/*"))
-        if snapshot_dir:
-            self.model_name = str(snapshot_dir[0])
+        # Persistent HTTP connection pool for low latency
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+        self.client = httpx.Client(base_url=self.base_url, limits=limits, timeout=timeout)
+
+    def _prepare_file_payload(self, audio: Union[str, Path, bytes]):
+        """Convert a file path or raw wav bytes into a multipart file tuple."""
+        if isinstance(audio, (str, Path)):
+            audio_path = Path(audio)
+            if not audio_path.exists():
+                raise FileNotFoundError(f"Audio file not found: {audio_path}")
+            return ("audio.wav", open(audio_path, "rb"), "audio/wav")
+        elif isinstance(audio, (bytes, bytearray)):
+            return ("audio.wav", bytes(audio), "audio/wav")
         else:
-            self.model_name = model_name
+            raise ValueError(f"Unsupported audio type: {type(audio)}")
 
-        self._model: Optional[Qwen3ASRModel] = None
+    def transcribe(self, audio: Union[str, Path, bytes]) -> str:
+        """
+        Transcribe a WAV audio file or raw WAV bytes to text.
+        Returns the transcription text.
+        """
+        file_tuple = self._prepare_file_payload(audio)
+        files = {"file": file_tuple}
+        data = {
+            "model": self.model_name,
+            "response_format": "json",
+        }
 
-    def get_model(self) -> Qwen3ASRModel:
-        """Lazy-loads the ASR model on first invocation."""
-        if self._model is not None:
-            return self._model
+        try:
+            response = self.client.post("/audio/transcriptions", files=files, data=data)
+            response.raise_for_status()
+            return response.json().get("text", "").strip()
+        finally:
+            # Safely close file descriptor if an opened file was passed
+            if hasattr(file_tuple[1], "close"):
+                file_tuple[1].close()
 
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    def transcribe_with_language(self, audio: Union[str, Path, bytes]) -> Dict[str, Any]:
+        """
+        Transcribe an audio file/bytes and return structured data (language and text).
+        """
+        file_tuple = self._prepare_file_payload(audio)
+        files = {"file": file_tuple}
+        data = {
+            "model": self.model_name,
+            "response_format": "json",
+        }
 
-        self._model = Qwen3ASRModel.from_pretrained(
-            self.model_name,
-            dtype=dtype,
-            device_map=device,
-        )
-        return self._model
+        try:
+            response = self.client.post("/audio/transcriptions", files=files, data=data)
+            response.raise_for_status()
+            res_json = response.json()
+            return {
+                "language": res_json.get("language", "auto"),
+                "text": res_json.get("text", "").strip(),
+            }
+        finally:
+            if hasattr(file_tuple[1], "close"):
+                file_tuple[1].close()
 
-    def transcribe(self, audio_path: Union[str, Path]) -> str:
-        """Transcribe an audio file to text. Returns transcription text only."""
-        model = self.get_model()
-        results = model.transcribe(audio=str(audio_path))
-        return results[0].text
-
-    def transcribe_with_language(self, audio_path: Union[str, Path]) -> Dict[str, Any]:
-        """Transcribe an audio file and return detected language along with text."""
-        model = self.get_model()
-        results = model.transcribe(audio=str(audio_path))
-        return {"language": results[0].language, "text": results[0].text}
-    
+    def close(self):
+        """Close connection pool."""
+        self.client.close()
+        
+        
