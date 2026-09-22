@@ -9,8 +9,16 @@ class QwenASRProvider:
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
     def __init__(self, model_name: str = "Qwen/Qwen3-ASR-0.6B"):
-        os.environ.setdefault("HF_HOME", str(self.PROJECT_ROOT / "models" / "hf"))
-        self.model_name = model_name
+        self.project_root = Path(__file__).resolve().parents[2]
+        self.hf_cache = self.project_root / "models" / "hf"
+        
+        # Check if local snapshot directory exists
+        snapshot_dir = list(self.hf_cache.glob("hub/models--Qwen--Qwen3-ASR-0.6B/snapshots/*"))
+        if snapshot_dir:
+            self.model_name = str(snapshot_dir[0])
+        else:
+            self.model_name = model_name
+
         self._model: Optional[Qwen3ASRModel] = None
 
     def get_model(self) -> Qwen3ASRModel:
