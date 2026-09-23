@@ -1,448 +1,349 @@
-/**
- * Unified Frontend Agent Controller
- * Supports: Chat Only, Speech-to-Speech (WebSocket), and Audio-to-Text (STT)
- */
+const $ = (id) => document.getElementById(id);
+const chat = $('chat'), messages = $('messages'), empty = $('empty'), input = $('user-input');
+const statusText = $('status-text'), statusDot = $('status-dot');
+const cfg = () => ({
+  asset_id: $('asset-id-input').value.trim() || '22',
+  thread_id: $('thread-id-input').value.trim() || 'default_session',
+  voice: $('voice-select').value,
+});
+const setStatus = (t, cls = '') => { statusText.textContent = t; statusDot.className = 'status-dot ' + cls; };
+const scrollDown = () => (chat.scrollTop = chat.scrollHeight);
+
+async function loadSessionHistory() {
+  const { thread_id, asset_id } = cfg();
+  if (!thread_id) return;
+  try {
+    const res = await fetch(`/agent/history?thread_id=${encodeURIComponent(thread_id)}&asset_id=${encodeURIComponent(asset_id)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const messagesData = Array.isArray(data.messages) ? data.messages : [];
+    if (!messagesData.length) return;
+
+    messages.innerHTML = '';
+    empty.classList.add('hidden');
+
+    for (const item of messagesData) {
+      const content = (item.content || '').trim();
+      if (!content) continue;
+      if (item.role === 'human' && content.startsWith('Summarize the answer to the request below')) continue;
+      if (item.role === 'human') {
+        addUser(content);
+      } else if (item.role === 'ai') {
+        const turn = newAssistantTurn();
+        turn.token(cleanGeneratedText(content));
+        turn.finish();
+      }
+    }
+  } catch (err) {
+    console.warn('Could not restore session history:', err);
+  }
+}
 
 class WavAudioRecorder {
-  constructor(targetSampleRate = 16000) {
-    this.targetSampleRate = targetSampleRate;
-    this.audioContext = null;
-    this.mediaStream = null;
-    this.processor = null;
-    this.input = null;
-    this.pcmChunks = [];
-    this.isRecording = false;
-  }
-
+  constructor(rate = 16000) { this.rate = rate; this.pcmChunks = []; this.isRecording = false; this.onFrame = null; }
   async start() {
     this.pcmChunks = [];
-    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    this.input = this.audioContext.createMediaStreamSource(this.mediaStream);
-    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
-
-    this.processor.onaudioprocess = (e) => {
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    this.src = this.ctx.createMediaStreamSource(this.stream);
+    this.proc = this.ctx.createScriptProcessor(4096, 1, 1);
+    this.proc.onaudioprocess = (e) => {
       if (!this.isRecording) return;
-      const inputBuffer = e.inputBuffer.getChannelData(0);
-      const downsampled = this.downsample(inputBuffer, this.audioContext.sampleRate, this.targetSampleRate);
-      this.pcmChunks.push(downsampled);
+      const data = e.inputBuffer.getChannelData(0);
+      let sum = 0; for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+      this.pcmChunks.push(this.downsample(data, this.ctx.sampleRate, this.rate));
+      if (this.onFrame) this.onFrame(Math.sqrt(sum / data.length));
     };
-
-    this.input.connect(this.processor);
-    this.processor.connect(this.audioContext.destination);
+    this.src.connect(this.proc); this.proc.connect(this.ctx.destination);
     this.isRecording = true;
   }
-
-  downsample(buffer, fromRate, toRate) {
-    if (fromRate === toRate) return new Float32Array(buffer);
-    const ratio = fromRate / toRate;
-    const newLength = Math.round(buffer.length / ratio);
-    const result = new Float32Array(newLength);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-    while (offsetResult < result.length) {
-      const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-      let accum = 0;
-      let count = 0;
-      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-        accum += buffer[i];
-        count++;
-      }
-      result[offsetResult] = count > 0 ? accum / count : 0;
-      offsetResult++;
-      offsetBuffer = nextOffsetBuffer;
+  downsample(buf, from, to) {
+    if (from === to) return new Float32Array(buf);
+    const ratio = from / to, out = new Float32Array(Math.round(buf.length / ratio));
+    let o = 0, b = 0;
+    while (o < out.length) {
+      const next = Math.round((o + 1) * ratio); let acc = 0, n = 0;
+      for (let i = b; i < next && i < buf.length; i++) { acc += buf[i]; n++; }
+      out[o++] = n ? acc / n : 0; b = next;
     }
-    return result;
+    return out;
   }
-
+  flush() {
+    const total = this.pcmChunks.reduce((a, c) => a + c.length, 0), m = new Float32Array(total);
+    let off = 0; for (const c of this.pcmChunks) { m.set(c, off); off += c.length; }
+    this.pcmChunks = [];
+    return this.encodeWAV(m, this.rate);
+  }
   async stop() {
     this.isRecording = false;
-    if (this.processor && this.input) {
-      this.input.disconnect();
-      this.processor.disconnect();
-    }
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => track.stop());
-    }
-    if (this.audioContext) {
-      await this.audioContext.close();
-    }
-
-    const totalLength = this.pcmChunks.reduce((acc, curr) => acc + curr.length, 0);
-    const merged = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of this.pcmChunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return this.encodeWAV(merged, this.targetSampleRate);
+    this.src?.disconnect(); this.proc?.disconnect();
+    this.stream?.getTracks().forEach((t) => t.stop());
+    await this.ctx?.close();
+    return this.flush();
   }
-
-  encodeWAV(samples, sampleRate) {
-    const buffer = new ArrayBuffer(44 + samples.length * 2);
-    const view = new DataView(buffer);
-
-    this.writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + samples.length * 2, true);
-    this.writeString(view, 8, 'WAVE');
-    this.writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    this.writeString(view, 36, 'data');
-    view.setUint32(40, samples.length * 2, true);
-
-    let index = 44;
-    for (let i = 0; i < samples.length; i++, index += 2) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(index, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    }
-    return new Blob([view], { type: 'audio/wav' });
-  }
-
-  writeString(view, offset, string) {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
+  encodeWAV(s, rate) {
+    const buf = new ArrayBuffer(44 + s.length * 2), v = new DataView(buf);
+    const w = (o, str) => [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    w(0, 'RIFF'); v.setUint32(4, 36 + s.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, 'data'); v.setUint32(40, s.length * 2, true);
+    let i = 44; for (const x of s) { const c = Math.max(-1, Math.min(1, x)); v.setInt16(i, c < 0 ? c * 0x8000 : c * 0x7fff, true); i += 2; }
+    return new Blob([v], { type: 'audio/wav' });
   }
 }
 
-// UI Elements
-const chatMessages = document.getElementById('chat-messages');
-const userInput = document.getElementById('user-input');
-const sendBtn = document.getElementById('send-btn');
-const micBtn = document.getElementById('mic-btn');
-const cancelRecBtn = document.getElementById('cancel-rec-btn');
-const recordingBar = document.getElementById('recording-bar');
-const recordingTimer = document.getElementById('recording-timer');
-const recordingModeLabel = document.getElementById('recording-mode-label');
-const statusDot = document.querySelector('.status-dot');
-const statusText = document.getElementById('status-text');
-const modeTabs = document.querySelectorAll('.mode-btn');
-const modeHint = document.getElementById('mode-hint');
-const toggleSettingsBtn = document.getElementById('toggle-settings-btn');
-const settingsPanel = document.getElementById('settings-panel');
-const voiceSelect = document.getElementById('voice-select');
-const assetIdInput = document.getElementById('asset-id-input');
-const threadIdInput = document.getElementById('thread-id-input');
-const newChatBtn = document.getElementById('new-chat-btn');
-
-// State
-let currentMode = 'chat'; // 'chat' | 's2s' | 'stt'
-let recorder = new WavAudioRecorder(16000);
-let timerInterval = null;
-let recordSeconds = 0;
-let ws = null;
-const audioQueue = [];
-let isPlayingAudio = false;
-
-// Mode Descriptions
-const modeHints = {
-  chat: 'Text Chat mode: streams text responses from the LangGraph agent.',
-  s2s: 'Speech-to-Speech mode: click the mic to speak and hear live audio responses.',
-  stt: 'Audio to Text mode: record voice to transcribe speech directly into text.'
-};
-
-// Initialize Mode Tabs
-modeTabs.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    modeTabs.forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentMode = btn.dataset.mode;
-    modeHint.textContent = modeHints[currentMode];
-    if (recorder.isRecording) cancelRecording();
-  });
-});
-
-// Settings Drawer Toggle
-toggleSettingsBtn.addEventListener('click', () => {
-  settingsPanel.classList.toggle('hidden');
-});
-
-// New Chat Session
-newChatBtn.addEventListener('click', () => {
-  threadIdInput.value = 'session_' + Math.random().toString(36).substring(2, 9);
-  chatMessages.innerHTML = '';
-  appendMessage('system', `Started new session: ${threadIdInput.value}`);
-});
-
-// Auto-expand textarea
-userInput.addEventListener('input', () => {
-  userInput.style.height = 'auto';
-  userInput.style.height = Math.min(userInput.scrollHeight, 180) + 'px';
-});
-
-userInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
+class Typewriter {
+  constructor(render) { this.q = ''; this.raw = ''; this.render = render; this.timer = null; this.onIdle = null; }
+  push(t) { this.q += t; if (!this.timer) this.timer = setInterval(() => this.tick(), 16); }
+  tick() {
+    if (!this.q) { clearInterval(this.timer); this.timer = null; this.onIdle?.(); return; }
+    const n = Math.max(1, Math.ceil(this.q.length / 40));
+    this.raw += this.q.slice(0, n); this.q = this.q.slice(n);
+    this.render(this.raw);
   }
-});
-
-sendBtn.addEventListener('click', handleSend);
-micBtn.addEventListener('click', toggleRecording);
-cancelRecBtn.addEventListener('click', cancelRecording);
-
-// Message UI Helpers
-function appendMessage(role, text) {
-  const msgDiv = document.createElement('div');
-  msgDiv.className = `message ${role}`;
-  const bubble = document.createElement('div');
-  bubble.className = 'bubble';
-  bubble.textContent = text;
-  msgDiv.appendChild(bubble);
-  chatMessages.appendChild(msgDiv);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-  return bubble;
+  whenDone(cb) { this.timer ? (this.onIdle = cb) : cb(); }
 }
 
-function setStatus(text, dotClass = '') {
-  statusText.textContent = text;
-  statusDot.className = `status-dot ${dotClass}`.trim();
+function cleanGeneratedText(text) {
+  return String(text || '')
+    .replace(/```(?:\w+)?\s*([\s\S]*?)```/g, '$1')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+const md = (t) => DOMPurify.sanitize(marked.parse(cleanGeneratedText(t), { breaks: true }));
+function addUser(text) {
+  empty.classList.add('hidden');
+  const d = document.createElement('div'); d.className = 'msg user';
+  d.innerHTML = '<div class="bubble"></div>'; d.firstChild.textContent = text;
+  messages.appendChild(d); scrollDown(); return d.firstChild;
+}
+function addSystem(text) {
+  const d = document.createElement('div'); d.className = 'msg system'; d.textContent = text;
+  messages.appendChild(d); scrollDown();
+}
+function newAssistantTurn() {
+  empty.classList.add('hidden');
+  const el = document.createElement('div'); el.className = 'msg assistant';
+  const bubble = document.createElement('div'); bubble.className = 'bubble cursor';
+  el.appendChild(bubble); messages.appendChild(el);
+  const tw = new Typewriter((raw) => { bubble.innerHTML = md(raw); scrollDown(); });
+  return {
+    el, bubble, tw,
+    token: (t) => tw.push(t),
+    action: (evt) => tw.whenDone(() => { el.appendChild(actionCard(evt)); scrollDown(); }),
+    finish: () => tw.whenDone(() => bubble.classList.remove('cursor')),
+    error: (m) => { bubble.classList.remove('cursor'); bubble.textContent = `Something went wrong: ${m}`; },
+  };
+}
+function actionCard(e) {
+  const c = document.createElement('div'); c.className = 'action-card' + (e.ok ? '' : ' fail');
+  const email = e.kind === 'email';
+  const title = email ? (e.ok ? 'Email sent' : 'Email failed') : (e.ok ? 'Report saved' : 'Report failed');
+  const sub = e.ok ? (email ? `To ${e.to}` + (e.preview ? ` · ${e.preview}` : '') : e.file) : e.error;
+  c.innerHTML = `<div class="ico">${email ? '✉️' : '📄'}</div>
+    <div class="meta"><div class="t"></div><div class="s"></div></div>
+    <span class="pill">${e.ok ? 'Done' : 'Failed'}</span>`;
+  c.querySelector('.t').textContent = title; c.querySelector('.s').textContent = sub || '';
+  return c;
 }
 
-// 1. Text Chat Mode (POST /agent/stream-text)
-async function handleTextChat(query) {
-  setStatus('Thinking...', 'busy');
-  const assistantBubble = appendMessage('assistant', '');
-
+async function sendText(query) {
+  addUser(query);
+  const turn = newAssistantTurn();
+  setStatus('Thinking…', 'busy');
   try {
-    const response = await fetch('/agent/stream-text', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: query,
-        asset_id: assetIdInput.value.trim() || '22',
-        voice: voiceSelect.value,
-        thread_id: threadIdInput.value.trim() || 'default_session'
-      })
-    });
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let accumulatedText = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      accumulatedText += decoder.decode(value, { stream: true });
-      assistantBubble.textContent = accumulatedText;
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-  } catch (err) {
-    assistantBubble.textContent = `Error streaming response: ${err.message}`;
-  } finally {
-    setStatus('Ready');
-  }
-}
-
-// 2. Speech-to-Speech Mode (WebSocket /ws/converse)
-function connectWebSocket() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws/converse`;
-  ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => setStatus('Ready');
-  ws.onerror = () => setStatus('WebSocket Error', 'busy');
-}
-
-connectWebSocket();
-
-async function handleSpeechToSpeech(wavBlob) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    connectWebSocket();
-    await new Promise((r) => setTimeout(r, 500));
-  }
-
-  setStatus('Processing voice...', 'busy');
-  const userBubble = appendMessage('user', '🎤 Voice input...');
-  const assistantBubble = appendMessage('assistant', '');
-
-  const reader = new FileReader();
-  reader.onloadend = () => {
-    const base64Audio = reader.result.split(',')[1];
-    ws.send(JSON.stringify({
-      type: 'audio',
-      data: base64Audio,
-      asset_id: assetIdInput.value.trim() || '22',
-      voice: voiceSelect.value,
-      thread_id: threadIdInput.value.trim() || 'default_session'
-    }));
-  };
-  reader.readAsDataURL(wavBlob);
-
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.type === 'transcript') {
-      userBubble.textContent = `🗣️ "${msg.data}"`;
-    } else if (msg.type === 'text_chunk') {
-      assistantBubble.textContent += msg.data;
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-    } else if (msg.type === 'audio_chunk') {
-      queueAudioWav(msg.data);
-    } else if (msg.type === 'done') {
-      setStatus('Ready');
-    }
-  };
-}
-
-// Audio Sequential Playback
-function queueAudioWav(base64Wav) {
-  const binary = atob(base64Wav);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  const blob = new Blob([bytes], { type: 'audio/wav' });
-  const url = URL.createObjectURL(blob);
-  audioQueue.push(url);
-  if (!isPlayingAudio) playNextAudio();
-}
-
-function playNextAudio() {
-  if (audioQueue.length === 0) {
-    isPlayingAudio = false;
-    return;
-  }
-  isPlayingAudio = true;
-  const audioUrl = audioQueue.shift();
-  const audio = new Audio(audioUrl);
-  audio.onended = () => {
-    URL.revokeObjectURL(audioUrl);
-    playNextAudio();
-  };
-  audio.onerror = () => {
-    URL.revokeObjectURL(audioUrl);
-    playNextAudio();
-  };
-  audio.play().catch(() => playNextAudio());
-}
-
-// 3. Audio to Text Dictation (POST /stt/transcribe)
-async function handleDictation(wavBlob) {
-  setStatus('Transcribing audio...', 'busy');
-  const formData = new FormData();
-  formData.append('file', wavBlob, 'recording.wav');
-
-  try {
-    const res = await fetch('/stt/transcribe', {
-      method: 'POST',
-      body: formData
+    const res = await fetch('/agent/stream-text', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, ...cfg() }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const transcribed = typeof data === 'string' ? data : (data.text || '');
-
-    if (transcribed) {
-      userInput.value = (userInput.value ? userInput.value + ' ' : '') + transcribed;
-      userInput.style.height = 'auto';
-      userInput.style.height = Math.min(userInput.scrollHeight, 180) + 'px';
-      userInput.focus();
-    } else {
-      appendMessage('system', 'No speech recognized from audio recording.');
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const l of lines) if (l.trim()) handleEvent(JSON.parse(l), turn);
     }
-  } catch (err) {
-    appendMessage('system', `STT Error: ${err.message}`);
-  } finally {
-    setStatus('Ready');
-  }
+  } catch (e) { turn.error(e.message); } finally { turn.finish(); setStatus('Ready'); }
+}
+function handleEvent(evt, turn) {
+  if (evt.type === 'token') turn.token(evt.data);
+  else if (evt.type === 'action') turn.action(evt);
+  else if (evt.type === 'error') turn.error(evt.data);
 }
 
-// Send trigger
 function handleSend() {
-  const query = userInput.value.trim();
-  if (!query) return;
+  const q = input.value.trim(); if (!q) return;
+  input.value = ''; input.style.height = 'auto'; sendText(q);
+}
+$('send-btn').onclick = handleSend;
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } });
+input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 180) + 'px'; });
+document.querySelectorAll('.chip').forEach((c) => (c.onclick = () => { input.value = c.textContent; input.focus(); }));
+$('settings-btn').onclick = () => $('settings-panel').classList.toggle('hidden');
+$('new-chat-btn').onclick = () => {
+  $('thread-id-input').value = 'session_' + Math.random().toString(36).slice(2, 9);
+  messages.innerHTML = ''; empty.classList.remove('hidden');
+  loadSessionHistory();
+};
 
-  userInput.value = '';
-  userInput.style.height = 'auto';
-  appendMessage('user', query);
+$('thread-id-input').addEventListener('change', loadSessionHistory);
+window.addEventListener('load', loadSessionHistory);
 
-  if (currentMode === 's2s') {
-    // S2S text submission also routes through WebSocket
-    const assistantBubble = appendMessage('assistant', '');
-    ws.send(JSON.stringify({
-      type: 'text',
-      data: query,
-      asset_id: assetIdInput.value.trim() || '22',
-      voice: voiceSelect.value,
-      thread_id: threadIdInput.value.trim() || 'default_session'
-    }));
+const dictRec = new WavAudioRecorder(16000);
+$('dictate-btn').onclick = async () => {
+  const btn = $('dictate-btn');
+  if (!dictRec.isRecording) {
+    try { await dictRec.start(); } catch (e) { return addSystem('Microphone error: ' + e.message); }
+    btn.classList.add('recording'); setStatus('Recording…', 'rec');
+    $('hint').textContent = 'Recording… click the mic again to stop';
+  } else {
+    btn.classList.remove('recording'); setStatus('Transcribing…', 'busy');
+    const wav = await dictRec.stop();
+    try {
+      const fd = new FormData(); fd.append('file', wav, 'rec.wav');
+      const r = await fetch('/stt/transcribe', { method: 'POST', body: fd });
+      const data = await r.json();
+      const text = (data.text || '').trim();
+      if (text) { input.value = (input.value ? input.value + ' ' : '') + text; input.dispatchEvent(new Event('input')); input.focus(); }
+      else addSystem('No speech recognized.');
+    } catch (e) { addSystem('STT error: ' + e.message); }
+    setStatus('Ready'); $('hint').textContent = 'Enter to send · Shift+Enter for a new line';
+  }
+};
 
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'text_chunk') {
-        assistantBubble.textContent += msg.data;
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-      } else if (msg.type === 'audio_chunk') {
-        queueAudioWav(msg.data);
-      } else if (msg.type === 'done') {
-        setStatus('Ready');
+let ws = null, wsReady = null, activeTurn = null;
+const audioQueue = []; let playing = false, serverDone = true;
+
+function ensureWs() {
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve();
+  if (wsReady) return wsReady;
+  wsReady = new Promise((res, rej) => {
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/converse`);
+    ws.onopen = () => { wsReady = null; res(); };
+    ws.onerror = () => { wsReady = null; rej(new Error('WebSocket error')); };
+    ws.onclose = () => { wsReady = null; };
+    ws.onmessage = (e) => onWsMessage(JSON.parse(e.data));
+  });
+  return wsReady;
+}
+function onWsMessage(m) {
+  if (m.type === 'transcript') return voice.onTranscript(m.data);
+  if (m.type === 'audio_chunk') return queueAudio(m.data);
+  if (m.type === 'done') { serverDone = true; activeTurn?.finish(); return voice.maybeResume(); }
+  if (activeTurn) handleEvent(m.type === 'text_chunk' ? { type: 'token', data: m.data } : m, activeTurn);
+}
+function queueAudio(b64) {
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  audioQueue.push(URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' })));
+  voice.setState('speaking');
+  if (!playing) playNext();
+}
+function playNext() {
+  if (!audioQueue.length) { playing = false; voice.maybeResume(); return; }
+  playing = true;
+  const url = audioQueue.shift(), a = new Audio(url);
+  const next = () => { URL.revokeObjectURL(url); playNext(); };
+  a.onended = next; a.onerror = next; a.play().catch(next);
+}
+
+const SPEECH_RMS = 0.06, SILENCE_MS = 1100, MIN_SPEECH_MS = 300;
+const voice = {
+  state: 'listening', muted: false, speaking: false, lastVoice: 0, startedAt: 0, rec: null, continueRequested: false, speechSamples: 0,
+  async open() {
+    try { await ensureWs(); this.rec = new WavAudioRecorder(16000); this.rec.onFrame = (r) => this.onFrame(r); await this.rec.start(); }
+    catch (e) { return addSystem('Voice mode error: ' + e.message); }
+    $('voice-overlay').classList.remove('hidden');
+    this.muted = false; this.continueRequested = false; this.speechSamples = 0; $('voice-mute').classList.remove('off'); $('voice-transcript').textContent = '';
+    this.setState('listening');
+  },
+  async close() {
+    $('voice-overlay').classList.add('hidden');
+    audioQueue.length = 0; playing = false;
+    await this.rec?.stop(); this.rec = null; this.speaking = false; this.continueRequested = false; this.speechSamples = 0;
+  },
+  setState(s) {
+    this.state = s; const orb = $('orb');
+    const isMicMutedOnly = this.muted && s === 'listening';
+    orb.className = 'orb ' + (isMicMutedOnly ? 'muted' : s);
+    $('voice-status').textContent = isMicMutedOnly ? 'Mic muted' : { listening: 'Listening…', thinking: 'Thinking…', speaking: 'Speaking…' }[s] || 'Listening…';
+    const level = s === 'listening' ? 0.12 : s === 'thinking' ? 0.22 : s === 'speaking' ? 0.32 : 0;
+    orb.style.setProperty('--level', level);
+  },
+  onFrame(rms) {
+    if (this.state !== 'listening') return;
+    if (this.muted) {
+      this.rec?.pcmChunks && (this.rec.pcmChunks = []);
+      this.speechSamples = 0;
+      return;
+    }
+    $('orb').style.setProperty('--level', Math.min(rms * 8, 0.35));
+    const now = performance.now();
+    if (rms > SPEECH_RMS) {
+      this.speechSamples += 1;
+      if (this.speechSamples >= 3 && !this.speaking) {
+        this.speaking = true;
+        this.startedAt = now;
       }
-    };
-  } else {
-    // Default chat
-    handleTextChat(query);
-  }
-}
+      this.lastVoice = now;
+    } else {
+      this.speechSamples = Math.max(0, this.speechSamples - 1);
+      if (!this.speaking) {
+        if (this.rec.pcmChunks.length > 3) this.rec.pcmChunks.shift();
+      }
+    }
 
-// Recording Controls
-async function toggleRecording() {
-  if (recorder.isRecording) {
-    stopRecordingAndProcess();
-  } else {
-    startRecording();
-  }
-}
-
-async function startRecording() {
-  try {
-    await recorder.start();
-    micBtn.classList.add('recording');
-    recordingBar.classList.remove('hidden');
-    recordingModeLabel.textContent = currentMode === 'stt' ? 'Dictating speech...' : 'Speaking to agent...';
-    setStatus('Recording...', 'recording');
-
-    recordSeconds = 0;
-    recordingTimer.textContent = '00:00';
-    timerInterval = setInterval(() => {
-      recordSeconds++;
-      const mins = String(Math.floor(recordSeconds / 60)).padStart(2, '0');
-      const secs = String(recordSeconds % 60).padStart(2, '0');
-      recordingTimer.textContent = `${mins}:${secs}`;
-    }, 1000);
-  } catch (err) {
-    appendMessage('system', `Microphone access error: ${err.message}`);
-    cancelRecording();
-  }
-}
-
-async function stopRecordingAndProcess() {
-  clearInterval(timerInterval);
-  micBtn.classList.remove('recording');
-  recordingBar.classList.add('hidden');
-  setStatus('Processing...', 'busy');
-
-  const wavBlob = await recorder.stop();
-
-  if (currentMode === 'stt') {
-    await handleDictation(wavBlob);
-  } else {
-    await handleSpeechToSpeech(wavBlob);
-  }
-}
-
-function cancelRecording() {
-  clearInterval(timerInterval);
-  if (recorder.isRecording) {
-    recorder.stop();
-  }
-  micBtn.classList.remove('recording');
-  recordingBar.classList.add('hidden');
-  setStatus('Ready');
-}
+    if (this.speaking && now - this.lastVoice > SILENCE_MS) {
+      this.speaking = false;
+      if (now - this.startedAt - SILENCE_MS < MIN_SPEECH_MS) {
+        this.rec.pcmChunks = [];
+        this.speechSamples = 0;
+        return;
+      }
+      this.sendUtterance();
+    }
+  },
+  sendUtterance() {
+    if (!this.rec || !ws || ws.readyState !== WebSocket.OPEN) return;
+    const wav = this.rec.flush(); this.setState('thinking'); serverDone = false;
+    this.speechSamples = 0;
+    const r = new FileReader();
+    r.onloadend = () => ws.send(JSON.stringify({ type: 'audio', data: r.result.split(',')[1], ...cfg() }));
+    r.readAsDataURL(wav);
+  },
+  onTranscript(text) {
+    if (!text) return;
+    const clean = text.trim();
+    $('voice-transcript').textContent = clean;
+    if (/^continue\b/i.test(clean)) {
+      this.continueRequested = true;
+      this.setState('listening');
+      $('voice-transcript').textContent = 'Continuing…';
+      return;
+    }
+    addUser(clean); activeTurn = newAssistantTurn();
+  },
+  maybeResume() {
+    if (this.continueRequested && !this.muted && !$('voice-overlay').classList.contains('hidden')) {
+      this.continueRequested = false;
+      this.rec?.pcmChunks && (this.rec.pcmChunks = []);
+      this.setState('listening');
+      return;
+    }
+    if (this.state !== 'listening' && serverDone && !playing && !audioQueue.length && !$('voice-overlay').classList.contains('hidden')) {
+      this.rec?.pcmChunks && (this.rec.pcmChunks = []);
+      this.setState('listening');
+    }
+  },
+};
+$('voice-btn').onclick = () => voice.open();
+$('voice-close').onclick = () => voice.close();
+$('voice-mute').onclick = () => {
+  voice.muted = !voice.muted; $('voice-mute').classList.toggle('off', voice.muted); if (voice.state === 'listening') voice.setState('listening');
+};

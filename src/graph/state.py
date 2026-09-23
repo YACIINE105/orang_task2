@@ -4,8 +4,9 @@ from typing import TypedDict, List, Optional
 
 class AgentState(TypedDict, total=False):
     asset_id: str
+    thread_id: str
     query: str
-    intent: str              # question | report | email
+    intent: str
     doc_results: List[dict]
     api_results: dict
     summary: str

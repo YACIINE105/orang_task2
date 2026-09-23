@@ -67,18 +67,20 @@ class KokoroTTSProvider:
         """Generates audio and writes directly to an output file."""
         _, pipeline = self.get_pipeline()
         generator = pipeline(text, voice=voice)
+        wrote_audio = False
         for _, _, audio in generator:
             sf.write(out_path, audio, 24000)
-            return out_path
-        return ""
+            wrote_audio = True
+        return out_path if wrote_audio else ""
 
     def synthesize_stream_bytes(self, text: str, voice: str = "af_heart") -> bytes:
         """Generates raw audio in-memory for live FastAPI chunk streaming."""
         _, pipeline = self.get_pipeline()
         generator = pipeline(text, voice=voice)
         buffer = io.BytesIO()
+        wrote_audio = False
         for _, _, audio in generator:
             sf.write(buffer, audio, 24000, format="RAW", subtype="PCM_16")
-            return buffer.getvalue()
-        return b""
+            wrote_audio = True
+        return buffer.getvalue() if wrote_audio else b""
     

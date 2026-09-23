@@ -15,7 +15,8 @@ Guidelines:
 - Reference specific sources using their number (e.g. "[1]") when citing information.
 - Be concise but complete — prefer clear structure (bullet points, short paragraphs) over long unbroken text.
 - If multiple context passages disagree or are ambiguous, point that out rather than silently picking one.
-- Do not mention "the context" or "the provided text" explicitly in your answer — just answer naturally as if you know this."""
+- Do not mention "the context" or "the provided text" explicitly in your answer — just answer naturally as if you know this.
+- Never use markdown headings or titles. Use short paragraphs and simple lists only."""
 
 INTENT_PROMPT = """Classify the request below as exactly one word: question, report, or email.
 - question: the user wants an answer
@@ -42,42 +43,54 @@ class OpenAIGenerationProvider:
         self.sessions: Dict[str, List[BaseMessage]] = {}  
         self.max_turns = max_turns
 
-    # ------------------------------------------------------------------
-    # History management (by asset_id)
-    # ------------------------------------------------------------------
-    def _get_history(self, asset_id: str) -> List[BaseMessage]:
-        return self.sessions.setdefault(asset_id, [])
+    def _resolve_session_key(self, asset_id: str, thread_id: Optional[str] = None) -> str:
+        return (thread_id or asset_id or "default_session")
 
-    def _trim(self, asset_id: str):
+    def _get_history(self, asset_id: str, thread_id: Optional[str] = None) -> List[BaseMessage]:
+        key = self._resolve_session_key(asset_id, thread_id)
+        return self.sessions.setdefault(key, [])
+
+    def _trim(self, asset_id: str, thread_id: Optional[str] = None):
         if not self.max_turns:
             return
-        history = self.sessions[asset_id]
+        key = self._resolve_session_key(asset_id, thread_id)
+        history = self.sessions[key]
         system_msgs = [m for m in history if isinstance(m, SystemMessage)]
         other_msgs = [m for m in history if not isinstance(m, SystemMessage)]
-        self.sessions[asset_id] = system_msgs + other_msgs[-self.max_turns:]
+        self.sessions[key] = system_msgs + other_msgs[-self.max_turns:]
 
-    def load_history(self, asset_id: str, messages: List[BaseMessage]):
+    def load_history(self, asset_id: str, messages: List[BaseMessage], thread_id: Optional[str] = None):
         """Restore an asset's history (e.g. loaded from Mongo) at session start."""
-        self.sessions[asset_id] = messages
+        self.sessions[self._resolve_session_key(asset_id, thread_id)] = messages
 
-    def load_history_from_dicts(self, asset_id: str, history: List[dict]):
+    def load_history_from_dicts(self, asset_id: str, history: List[dict], thread_id: Optional[str] = None):
         """Convenience wrapper: restore from [{'role': ..., 'content': ...}, ...]."""
-        restored = [_ROLE_TO_CLASS[m["role"]](content=m["content"]) for m in history]
-        self.load_history(asset_id, restored)
+        restored = [
+            _ROLE_TO_CLASS[m["role"]](content=m["content"])
+            for m in history
+            if not (
+                m.get("role") == "human"
+                and str(m.get("content", "")).startswith("Summarize the answer to the request below")
+            )
+        ]
+        self.load_history(asset_id, restored, thread_id=thread_id)
 
-    def export_history(self, asset_id: str) -> List[dict]:
+    def export_history(self, asset_id: str, thread_id: Optional[str] = None) -> List[dict]:
         """Serialize an asset's history to plain dicts for storage (e.g. in Mongo)."""
+        key = self._resolve_session_key(asset_id, thread_id)
         return [
             {"role": _CLASS_TO_ROLE[type(m)], "content": m.content}
-            for m in self.sessions.get(asset_id, [])
+            for m in self.sessions.get(key, [])
         ]
 
-    def clear(self, asset_id: str):
-        self.sessions.pop(asset_id, None)
+    def clear(self, asset_id: str, thread_id: Optional[str] = None):
+        self.sessions.pop(self._resolve_session_key(asset_id, thread_id), None)
 
-    # ------------------------------------------------------------------
-    # LLM provider
-    # ------------------------------------------------------------------
+    def recent_conversation(self, asset_id: str, thread_id: Optional[str] = None, limit: int = 4) -> str:
+        key = self._resolve_session_key(asset_id, thread_id)
+        messages = [m for m in self.sessions.get(key, []) if not isinstance(m, SystemMessage)]
+        return "\n".join(str(m.content) for m in messages[-limit:] if m.content)
+
     def get_generation_provider(self) -> ChatOpenAI:
         return ChatOpenAI(
             model=os.getenv("GENERATION_MODEL_ID"),
@@ -86,9 +99,6 @@ class OpenAIGenerationProvider:
             temperature=0.5,
         )
 
-    # ------------------------------------------------------------------
-    # Prompt construction
-    # ------------------------------------------------------------------
     def build_system_prompt(self, search_results: List[dict], system_prompt: Optional[str] = None) -> str:
         context_text = "\n\n".join(
             f"[{i + 1}] {result['text']}" for i, result in enumerate(search_results)
@@ -102,21 +112,20 @@ class OpenAIGenerationProvider:
         query: str,
         search_results: List[dict],
         system_prompt: Optional[str] = None,
+        thread_id: Optional[str] = None,
     ) -> List[BaseMessage]:
-        history = self._get_history(asset_id)
+        key = self._resolve_session_key(asset_id, thread_id)
+        history = self._get_history(asset_id, thread_id)
 
 
         history = [m for m in history if not isinstance(m, SystemMessage)]
         history.insert(0, SystemMessage(content=self.build_system_prompt(search_results, system_prompt)))
         history.append(HumanMessage(content=query))
 
-        self.sessions[asset_id] = history
-        self._trim(asset_id)
-        return self.sessions[asset_id]
+        self.sessions[key] = history
+        self._trim(asset_id, thread_id)
+        return self.sessions[key]
 
-    # ------------------------------------------------------------------
-    # Generation
-    # ------------------------------------------------------------------
     def generate_text(
         self,
         asset_id: str,
@@ -124,9 +133,11 @@ class OpenAIGenerationProvider:
         search_results: List[dict],
         system_prompt: Optional[str] = None,
         verbose: bool = False,
+        thread_id: Optional[str] = None,
     ) -> str:
         llm = self.get_generation_provider()
-        messages = self.prepare_query(asset_id, query, search_results, system_prompt)
+        messages = self.prepare_query(asset_id, query, search_results, system_prompt, thread_id=thread_id)
+        key = self._resolve_session_key(asset_id, thread_id)
 
         if verbose:
             context_text = "\n\n".join(
@@ -139,7 +150,7 @@ class OpenAIGenerationProvider:
             )
 
         response = llm.invoke(messages)
-        self.sessions[asset_id].append(AIMessage(content=response.content))
+        self.sessions[key].append(AIMessage(content=response.content))
         return response.content
     
     

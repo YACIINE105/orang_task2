@@ -14,7 +14,6 @@ class QwenASRProvider:
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
         
-        # Persistent HTTP connection pool for low latency
         limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
         self.client = httpx.Client(base_url=self.base_url, limits=limits, timeout=timeout)
 
@@ -47,7 +46,6 @@ class QwenASRProvider:
             response.raise_for_status()
             return response.json().get("text", "").strip()
         finally:
-            # Safely close file descriptor if an opened file was passed
             if hasattr(file_tuple[1], "close"):
                 file_tuple[1].close()
 

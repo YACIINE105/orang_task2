@@ -19,7 +19,6 @@ nodes = AgentNodes()
 graph = build_graph(nodes)
 
 
-# ---------- ingestion ----------
 folder_path = "/home/yacine_105/orange_tasks/task2/pdfs"
 pdf_files = glob.glob(os.path.join(folder_path, "*.pdf"))
 print(f"Found {len(pdf_files)} PDFs")
@@ -41,13 +40,11 @@ for file_path in pdf_files:
     embeddings = embeddings_client.get_embeddings_for_chunks(chunks=chunks)
     qdrant.store_embeddings_for_asset(asset_id=asset_id, chunks=chunks, embeddings=embeddings)
 
-# ---------- resume history ----------
 stored_history = mongo.get_chat_history(asset_id=asset_id)
 if stored_history:
     nodes.provider.load_history_from_dicts(asset_id, stored_history)
     print(f"Resumed {len(stored_history)} prior messages for asset '{asset_id}'.")
 
-# ---------- chat loop ----------
 print("####### multi-agent RAG (type 'exit' or 'q' to quit) #######")
 while True:
     query = input("\nEnter a request: ").strip()
