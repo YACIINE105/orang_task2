@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
-from graph.state import AgentState
-from graph.nodes import AgentNodes
+from src.graph.state import AgentState 
+from src.graph.nodes import AgentNodes
 
 def build_graph(nodes=None):
     nodes = nodes or AgentNodes()

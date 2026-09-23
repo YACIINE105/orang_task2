@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Voice Agent</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot" id="statusDot"></span>
+        <h1>LangGraph Voice Agent</h1>
+      </div>
+      <div class="settings">
+        <label>Voice
+          <select id="voiceSelect">
+            <option value="af_heart">af_heart</option>
+            <option value="af_bella">af_bella</option>
+            <option value="am_adam">am_adam</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <main class="chat" id="chat"></main>
+
+    <footer class="composer">
+      <button id="micBtn" class="mic-btn" title="Hold to talk">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+      <input id="textInput" type="text" placeholder="Type a message or hold the mic to speak..." />
+      <button id="sendBtn" class="send-btn">Send</button>
+    </footer>
+  </div>
+
+  <div id="recIndicator" class="rec-indicator hidden">
+    <span class="pulse"></span> Recording... release to send
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
