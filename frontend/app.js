@@ -1,310 +1,448 @@
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws/converse";
-const ASSET_ID = "22";
-const THREAD_ID = "default_session";
+/**
+ * Unified Frontend Agent Controller
+ * Supports: Chat Only, Speech-to-Speech (WebSocket), and Audio-to-Text (STT)
+ */
 
-// ---------------------------------------------------------------------------
-// DOM refs
-// ---------------------------------------------------------------------------
-const chatEl = document.getElementById("chat");
-const textInput = document.getElementById("textInput");
-const sendBtn = document.getElementById("sendBtn");
-const micBtn = document.getElementById("micBtn");
-const voiceSelect = document.getElementById("voiceSelect");
-const statusDot = document.getElementById("statusDot");
-const recIndicator = document.getElementById("recIndicator");
-
-// ---------------------------------------------------------------------------
-// WAV recorder (raw PCM capture -> real .wav bytes, no ffmpeg needed)
-// ---------------------------------------------------------------------------
-class WavRecorder {
-  constructor(sampleRate = 16000) {
-    this.sampleRate = sampleRate;
-    this.chunks = [];
-    this.ctx = null;
+class WavAudioRecorder {
+  constructor(targetSampleRate = 16000) {
+    this.targetSampleRate = targetSampleRate;
+    this.audioContext = null;
+    this.mediaStream = null;
     this.processor = null;
-    this.source = null;
-    this.stream = null;
+    this.input = null;
+    this.pcmChunks = [];
+    this.isRecording = false;
   }
 
   async start() {
-    this.chunks = [];
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, sampleRate: this.sampleRate, echoCancellation: true, noiseSuppression: true },
-    });
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: this.sampleRate });
-    this.source = this.ctx.createMediaStreamSource(this.stream);
-    this.processor = this.ctx.createScriptProcessor(4096, 1, 1);
+    this.pcmChunks = [];
+    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.input = this.audioContext.createMediaStreamSource(this.mediaStream);
+    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
-      const input = e.inputBuffer.getChannelData(0);
-      this.chunks.push(new Float32Array(input));
+      if (!this.isRecording) return;
+      const inputBuffer = e.inputBuffer.getChannelData(0);
+      const downsampled = this.downsample(inputBuffer, this.audioContext.sampleRate, this.targetSampleRate);
+      this.pcmChunks.push(downsampled);
     };
 
-    this.source.connect(this.processor);
-    this.processor.connect(this.ctx.destination);
+    this.input.connect(this.processor);
+    this.processor.connect(this.audioContext.destination);
+    this.isRecording = true;
   }
 
-  stop() {
-    if (this.processor) this.processor.disconnect();
-    if (this.source) this.source.disconnect();
-    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
-    if (this.ctx) this.ctx.close();
-
-    const merged = this._mergeChunks(this.chunks);
-    return this._encodeWav(merged, this.sampleRate);
-  }
-
-  _mergeChunks(chunks) {
-    const total = chunks.reduce((sum, c) => sum + c.length, 0);
-    const result = new Float32Array(total);
-    let offset = 0;
-    for (const c of chunks) {
-      result.set(c, offset);
-      offset += c.length;
+  downsample(buffer, fromRate, toRate) {
+    if (fromRate === toRate) return new Float32Array(buffer);
+    const ratio = fromRate / toRate;
+    const newLength = Math.round(buffer.length / ratio);
+    const result = new Float32Array(newLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+        accum += buffer[i];
+        count++;
+      }
+      result[offsetResult] = count > 0 ? accum / count : 0;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
     }
     return result;
   }
 
-  _encodeWav(float32, sampleRate) {
-    const numFrames = float32.length;
-    const bytesPerSample = 2;
-    const blockAlign = bytesPerSample; // mono
-    const byteRate = sampleRate * blockAlign;
-    const dataSize = numFrames * bytesPerSample;
-    const buffer = new ArrayBuffer(44 + dataSize);
+  async stop() {
+    this.isRecording = false;
+    if (this.processor && this.input) {
+      this.input.disconnect();
+      this.processor.disconnect();
+    }
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach((track) => track.stop());
+    }
+    if (this.audioContext) {
+      await this.audioContext.close();
+    }
+
+    const totalLength = this.pcmChunks.reduce((acc, curr) => acc + curr.length, 0);
+    const merged = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of this.pcmChunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return this.encodeWAV(merged, this.targetSampleRate);
+  }
+
+  encodeWAV(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
     const view = new DataView(buffer);
 
-    const writeStr = (offset, str) => {
-      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-    };
-
-    writeStr(0, "RIFF");
-    view.setUint32(4, 36 + dataSize, true);
-    writeStr(8, "WAVE");
-    writeStr(12, "fmt ");
-    view.setUint32(16, 16, true);       // PCM chunk size
-    view.setUint16(20, 1, true);        // audio format = PCM
-    view.setUint16(22, 1, true);        // channels = mono
+    this.writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    this.writeString(view, 8, 'WAVE');
+    this.writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
     view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, 16, true);       // bits per sample
-    writeStr(36, "data");
-    view.setUint32(40, dataSize, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    this.writeString(view, 36, 'data');
+    view.setUint32(40, samples.length * 2, true);
 
-    // Float32 [-1,1] -> Int16 PCM
-    let offset = 44;
-    for (let i = 0; i < numFrames; i++, offset += 2) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    let index = 44;
+    for (let i = 0; i < samples.length; i++, index += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(index, s < 0 ? s * 0x8000 : s * 0x7fff, true);
     }
-
-    return new Blob([buffer], { type: "audio/wav" });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Sequential audio playback queue (plays TTS chunks in generation order)
-// ---------------------------------------------------------------------------
-class AudioQueue {
-  constructor() {
-    this.queue = [];
-    this.playing = false;
+    return new Blob([view], { type: 'audio/wav' });
   }
 
-  push(blobUrl) {
-    this.queue.push(blobUrl);
-    if (!this.playing) this._playNext();
-  }
-
-  _playNext() {
-    if (this.queue.length === 0) {
-      this.playing = false;
-      setStatusSpeaking(false);
-      return;
+  writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
     }
-    this.playing = true;
-    setStatusSpeaking(true);
-    const url = this.queue.shift();
-    const audio = new Audio(url);
-    audio.onended = () => {
-      URL.revokeObjectURL(url);
-      this._playNext();
-    };
-    audio.onerror = () => this._playNext();
-    audio.play().catch(() => this._playNext());
   }
 }
 
-const audioQueue = new AudioQueue();
+// UI Elements
+const chatMessages = document.getElementById('chat-messages');
+const userInput = document.getElementById('user-input');
+const sendBtn = document.getElementById('send-btn');
+const micBtn = document.getElementById('mic-btn');
+const cancelRecBtn = document.getElementById('cancel-rec-btn');
+const recordingBar = document.getElementById('recording-bar');
+const recordingTimer = document.getElementById('recording-timer');
+const recordingModeLabel = document.getElementById('recording-mode-label');
+const statusDot = document.querySelector('.status-dot');
+const statusText = document.getElementById('status-text');
+const modeTabs = document.querySelectorAll('.mode-btn');
+const modeHint = document.getElementById('mode-hint');
+const toggleSettingsBtn = document.getElementById('toggle-settings-btn');
+const settingsPanel = document.getElementById('settings-panel');
+const voiceSelect = document.getElementById('voice-select');
+const assetIdInput = document.getElementById('asset-id-input');
+const threadIdInput = document.getElementById('thread-id-input');
+const newChatBtn = document.getElementById('new-chat-btn');
 
-// ---------------------------------------------------------------------------
-// Chat rendering helpers
-// ---------------------------------------------------------------------------
-function addMessage(text, cls) {
-  const div = document.createElement("div");
-  div.className = `msg ${cls}`;
-  div.textContent = text;
-  chatEl.appendChild(div);
-  chatEl.scrollTop = chatEl.scrollHeight;
-  return div;
+// State
+let currentMode = 'chat'; // 'chat' | 's2s' | 'stt'
+let recorder = new WavAudioRecorder(16000);
+let timerInterval = null;
+let recordSeconds = 0;
+let ws = null;
+const audioQueue = [];
+let isPlayingAudio = false;
+
+// Mode Descriptions
+const modeHints = {
+  chat: 'Text Chat mode: streams text responses from the LangGraph agent.',
+  s2s: 'Speech-to-Speech mode: click the mic to speak and hear live audio responses.',
+  stt: 'Audio to Text mode: record voice to transcribe speech directly into text.'
+};
+
+// Initialize Mode Tabs
+modeTabs.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    modeTabs.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentMode = btn.dataset.mode;
+    modeHint.textContent = modeHints[currentMode];
+    if (recorder.isRecording) cancelRecording();
+  });
+});
+
+// Settings Drawer Toggle
+toggleSettingsBtn.addEventListener('click', () => {
+  settingsPanel.classList.toggle('hidden');
+});
+
+// New Chat Session
+newChatBtn.addEventListener('click', () => {
+  threadIdInput.value = 'session_' + Math.random().toString(36).substring(2, 9);
+  chatMessages.innerHTML = '';
+  appendMessage('system', `Started new session: ${threadIdInput.value}`);
+});
+
+// Auto-expand textarea
+userInput.addEventListener('input', () => {
+  userInput.style.height = 'auto';
+  userInput.style.height = Math.min(userInput.scrollHeight, 180) + 'px';
+});
+
+userInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleSend();
+  }
+});
+
+sendBtn.addEventListener('click', handleSend);
+micBtn.addEventListener('click', toggleRecording);
+cancelRecBtn.addEventListener('click', cancelRecording);
+
+// Message UI Helpers
+function appendMessage(role, text) {
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `message ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+  msgDiv.appendChild(bubble);
+  chatMessages.appendChild(msgDiv);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return bubble;
 }
 
-function appendAudioIcon(msgEl) {
-  if (msgEl.querySelector(".audio-icon")) return;
-  const icon = document.createElement("div");
-  icon.className = "audio-icon";
-  icon.innerHTML = `<span class="bars"><span></span><span></span><span></span></span> voice`;
-  msgEl.appendChild(icon);
+function setStatus(text, dotClass = '') {
+  statusText.textContent = text;
+  statusDot.className = `status-dot ${dotClass}`.trim();
 }
 
-function setStatusSpeaking(isSpeaking) {
-  statusDot.classList.toggle("connected", isSpeaking || wsIsOpen());
+// 1. Text Chat Mode (POST /agent/stream-text)
+async function handleTextChat(query) {
+  setStatus('Thinking...', 'busy');
+  const assistantBubble = appendMessage('assistant', '');
+
+  try {
+    const response = await fetch('/agent/stream-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: query,
+        asset_id: assetIdInput.value.trim() || '22',
+        voice: voiceSelect.value,
+        thread_id: threadIdInput.value.trim() || 'default_session'
+      })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let accumulatedText = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      accumulatedText += decoder.decode(value, { stream: true });
+      assistantBubble.textContent = accumulatedText;
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+  } catch (err) {
+    assistantBubble.textContent = `Error streaming response: ${err.message}`;
+  } finally {
+    setStatus('Ready');
+  }
 }
 
-function wsIsOpen() {
-  return ws && ws.readyState === WebSocket.OPEN;
+// 2. Speech-to-Speech Mode (WebSocket /ws/converse)
+function connectWebSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws/converse`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => setStatus('Ready');
+  ws.onerror = () => setStatus('WebSocket Error', 'busy');
 }
 
-// ---------------------------------------------------------------------------
-// WebSocket lifecycle
-// ---------------------------------------------------------------------------
-let ws;
-let currentBotBubble = null;
+connectWebSocket();
 
-function connect() {
-  ws = new WebSocket(WS_URL);
+async function handleSpeechToSpeech(wavBlob) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    connectWebSocket();
+    await new Promise((r) => setTimeout(r, 500));
+  }
 
-  ws.onopen = () => {
-    statusDot.classList.add("connected");
+  setStatus('Processing voice...', 'busy');
+  const userBubble = appendMessage('user', '🎤 Voice input...');
+  const assistantBubble = appendMessage('assistant', '');
+
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    const base64Audio = reader.result.split(',')[1];
+    ws.send(JSON.stringify({
+      type: 'audio',
+      data: base64Audio,
+      asset_id: assetIdInput.value.trim() || '22',
+      voice: voiceSelect.value,
+      thread_id: threadIdInput.value.trim() || 'default_session'
+    }));
   };
-
-  ws.onclose = () => {
-    statusDot.classList.remove("connected");
-    setTimeout(connect, 1500); // auto-reconnect
-  };
-
-  ws.onerror = () => ws.close();
+  reader.readAsDataURL(wavBlob);
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
-
-    switch (msg.type) {
-      case "transcript":
-        addMessage(msg.data, "msg transcript");
-        break;
-
-      case "text_chunk":
-        if (!currentBotBubble) {
-          currentBotBubble = addMessage("", "bot streaming");
-        }
-        currentBotBubble.textContent += (currentBotBubble.textContent ? " " : "") + msg.data;
-        chatEl.scrollTop = chatEl.scrollHeight;
-        break;
-
-      case "audio_chunk": {
-        const bytes = atob(msg.data);
-        const arr = new Uint8Array(bytes.length);
-        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-        const blob = new Blob([arr], { type: "audio/wav" });
-        const url = URL.createObjectURL(blob);
-        audioQueue.push(url);
-        if (currentBotBubble) appendAudioIcon(currentBotBubble);
-        break;
-      }
-
-      case "done":
-        if (currentBotBubble) currentBotBubble.classList.remove("streaming");
-        currentBotBubble = null;
-        break;
-
-      default:
-        break;
+    if (msg.type === 'transcript') {
+      userBubble.textContent = `🗣️ "${msg.data}"`;
+    } else if (msg.type === 'text_chunk') {
+      assistantBubble.textContent += msg.data;
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    } else if (msg.type === 'audio_chunk') {
+      queueAudioWav(msg.data);
+    } else if (msg.type === 'done') {
+      setStatus('Ready');
     }
   };
 }
 
-// ---------------------------------------------------------------------------
-// Send helpers
-// ---------------------------------------------------------------------------
-function sendText(text) {
-  if (!text.trim() || !wsIsOpen()) return;
-  addMessage(text, "user");
-  ws.send(JSON.stringify({
-    type: "text",
-    data: text,
-    asset_id: ASSET_ID,
-    thread_id: THREAD_ID,
-    voice: voiceSelect.value,
-  }));
-  textInput.value = "";
+// Audio Sequential Playback
+function queueAudioWav(base64Wav) {
+  const binary = atob(base64Wav);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: 'audio/wav' });
+  const url = URL.createObjectURL(blob);
+  audioQueue.push(url);
+  if (!isPlayingAudio) playNextAudio();
 }
 
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+function playNextAudio() {
+  if (audioQueue.length === 0) {
+    isPlayingAudio = false;
+    return;
+  }
+  isPlayingAudio = true;
+  const audioUrl = audioQueue.shift();
+  const audio = new Audio(audioUrl);
+  audio.onended = () => {
+    URL.revokeObjectURL(audioUrl);
+    playNextAudio();
+  };
+  audio.onerror = () => {
+    URL.revokeObjectURL(audioUrl);
+    playNextAudio();
+  };
+  audio.play().catch(() => playNextAudio());
 }
 
-async function sendAudioBlob(blob) {
-  if (!wsIsOpen()) return;
-  const b64 = await blobToBase64(blob);
-  ws.send(JSON.stringify({
-    type: "audio",
-    data: b64,
-    asset_id: ASSET_ID,
-    thread_id: THREAD_ID,
-    voice: voiceSelect.value,
-  }));
-}
+// 3. Audio to Text Dictation (POST /stt/transcribe)
+async function handleDictation(wavBlob) {
+  setStatus('Transcribing audio...', 'busy');
+  const formData = new FormData();
+  formData.append('file', wavBlob, 'recording.wav');
 
-// ---------------------------------------------------------------------------
-// UI wiring
-// ---------------------------------------------------------------------------
-sendBtn.addEventListener("click", () => sendText(textInput.value));
-textInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendText(textInput.value);
-});
-
-let recorder = null;
-let isRecording = false;
-
-async function startRecording() {
-  if (isRecording) return;
   try {
-    recorder = new WavRecorder(16000);
-    await recorder.start();
-    isRecording = true;
-    micBtn.classList.add("recording");
-    recIndicator.classList.remove("hidden");
+    const res = await fetch('/stt/transcribe', {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const transcribed = typeof data === 'string' ? data : (data.text || '');
+
+    if (transcribed) {
+      userInput.value = (userInput.value ? userInput.value + ' ' : '') + transcribed;
+      userInput.style.height = 'auto';
+      userInput.style.height = Math.min(userInput.scrollHeight, 180) + 'px';
+      userInput.focus();
+    } else {
+      appendMessage('system', 'No speech recognized from audio recording.');
+    }
   } catch (err) {
-    console.error("Mic access failed:", err);
+    appendMessage('system', `STT Error: ${err.message}`);
+  } finally {
+    setStatus('Ready');
   }
 }
 
-async function stopRecording() {
-  if (!isRecording || !recorder) return;
-  isRecording = false;
-  micBtn.classList.remove("recording");
-  recIndicator.classList.add("hidden");
-  const wavBlob = recorder.stop();
-  await sendAudioBlob(wavBlob);
+// Send trigger
+function handleSend() {
+  const query = userInput.value.trim();
+  if (!query) return;
+
+  userInput.value = '';
+  userInput.style.height = 'auto';
+  appendMessage('user', query);
+
+  if (currentMode === 's2s') {
+    // S2S text submission also routes through WebSocket
+    const assistantBubble = appendMessage('assistant', '');
+    ws.send(JSON.stringify({
+      type: 'text',
+      data: query,
+      asset_id: assetIdInput.value.trim() || '22',
+      voice: voiceSelect.value,
+      thread_id: threadIdInput.value.trim() || 'default_session'
+    }));
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'text_chunk') {
+        assistantBubble.textContent += msg.data;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      } else if (msg.type === 'audio_chunk') {
+        queueAudioWav(msg.data);
+      } else if (msg.type === 'done') {
+        setStatus('Ready');
+      }
+    };
+  } else {
+    // Default chat
+    handleTextChat(query);
+  }
 }
 
-// Push-to-talk: hold mouse/touch to record
-micBtn.addEventListener("mousedown", startRecording);
-micBtn.addEventListener("mouseup", stopRecording);
-micBtn.addEventListener("mouseleave", () => { if (isRecording) stopRecording(); });
-micBtn.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); });
-micBtn.addEventListener("touchend", (e) => { e.preventDefault(); stopRecording(); });
+// Recording Controls
+async function toggleRecording() {
+  if (recorder.isRecording) {
+    stopRecordingAndProcess();
+  } else {
+    startRecording();
+  }
+}
 
-// ---------------------------------------------------------------------------
-// Boot
-// ---------------------------------------------------------------------------
-connect();
+async function startRecording() {
+  try {
+    await recorder.start();
+    micBtn.classList.add('recording');
+    recordingBar.classList.remove('hidden');
+    recordingModeLabel.textContent = currentMode === 'stt' ? 'Dictating speech...' : 'Speaking to agent...';
+    setStatus('Recording...', 'recording');
+
+    recordSeconds = 0;
+    recordingTimer.textContent = '00:00';
+    timerInterval = setInterval(() => {
+      recordSeconds++;
+      const mins = String(Math.floor(recordSeconds / 60)).padStart(2, '0');
+      const secs = String(recordSeconds % 60).padStart(2, '0');
+      recordingTimer.textContent = `${mins}:${secs}`;
+    }, 1000);
+  } catch (err) {
+    appendMessage('system', `Microphone access error: ${err.message}`);
+    cancelRecording();
+  }
+}
+
+async function stopRecordingAndProcess() {
+  clearInterval(timerInterval);
+  micBtn.classList.remove('recording');
+  recordingBar.classList.add('hidden');
+  setStatus('Processing...', 'busy');
+
+  const wavBlob = await recorder.stop();
+
+  if (currentMode === 'stt') {
+    await handleDictation(wavBlob);
+  } else {
+    await handleSpeechToSpeech(wavBlob);
+  }
+}
+
+function cancelRecording() {
+  clearInterval(timerInterval);
+  if (recorder.isRecording) {
+    recorder.stop();
+  }
+  micBtn.classList.remove('recording');
+  recordingBar.classList.add('hidden');
+  setStatus('Ready');
+}
