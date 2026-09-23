@@ -1,10 +1,11 @@
-from llm.OpenaiProvider import OpenAIGenerationProvider
-from embedding.OpenAIProvider import OpenAIEmbeddingProvider
-from Vector_store.v_db import VectorDataBase
+from src.llm.OpenaiProvider import OpenAIGenerationProvider
+from src.embedding.OpenAIProvider import OpenAIEmbeddingProvider
+from src.Vector_store.v_db import VectorDataBase
+from src.graph.state import AgentState
+from src.actions.report import write_report
+from src.actions.email import send_email
 import os
-from graph.state import AgentState
-from actions.report import write_report
-from actions.email import send_email
+
 
 INTENTS = {"question", "report", "email"}
 

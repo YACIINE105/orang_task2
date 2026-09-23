@@ -8,9 +8,13 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import base64, tempfile
+from fastapi import WebSocket, WebSocketDisconnect
+
 from src.graph.build import build_graph
 from src.tts.kokoro_provider import KokoroTTSProvider
 from src.stt.qwen_asr_provider import QwenASRProvider
+from src.tts.wav_utils import pcm_to_wav_bytes
 
 app = FastAPI(title="LangGraph Voice Agent - Speech-to-Speech Streaming")
 
@@ -170,5 +174,44 @@ async def speech_to_speech_endpoint(
         media_type="audio/pcm",
         headers={"X-Transcribed-Text": safe_header_text},
     )
+    
+    
+
+
+@app.websocket("/ws/converse")
+async def converse_ws(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            msg = await ws.receive_json()
+
+            if msg["type"] == "audio":
+                wav_bytes = base64.b64decode(msg["data"])
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    tmp.write(wav_bytes)
+                    tmp_path = tmp.name
+                transcript = await asyncio.to_thread(stt_provider.transcribe, tmp_path)
+                os.remove(tmp_path)
+                query = transcript if isinstance(transcript, str) else transcript.get("text", "")
+                await ws.send_json({"type": "transcript", "data": query})
+            else:
+                query = msg["data"]
+
+            asset_id = msg.get("asset_id", "22")
+            thread_id = msg.get("thread_id", "default_session")
+            voice = msg.get("voice", "af_heart")
+
+            async for sentence in stream_graph_sentences(query, asset_id, thread_id):
+                await ws.send_json({"type": "text_chunk", "data": sentence})
+                clean = re.sub(r"\[\d+(?:-\d+)?\]", "", sentence)
+                clean = re.sub(r"[*#_`]", "", clean).strip()
+                if clean:
+                    pcm = await asyncio.to_thread(tts_provider.synthesize_stream_bytes, clean, voice)
+                    wav = pcm_to_wav_bytes(pcm)
+                    await ws.send_json({"type": "audio_chunk", "data": base64.b64encode(wav).decode()})
+
+            await ws.send_json({"type": "done"})
+    except WebSocketDisconnect:
+        pass
     
     
