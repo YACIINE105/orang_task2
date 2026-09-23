@@ -3,24 +3,35 @@ import re
 import asyncio
 import tempfile
 import urllib.parse
+from pathlib import Path
 from typing import AsyncGenerator
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
-import base64, tempfile
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from src.graph.build import build_graph
 from src.tts.kokoro_provider import KokoroTTSProvider
 from src.stt.qwen_asr_provider import QwenASRProvider
 from src.tts.wav_utils import pcm_to_wav_bytes
 
-from fastapi.staticfiles import StaticFiles
-
 app = FastAPI(title="LangGraph Voice Agent - Speech-to-Speech Streaming")
 
-# Lazy/cached initialization of pipeline components
+# Enable CORS for browser access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Static files path resolution
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+# Cached pipeline singletons
 graph = build_graph()
 tts_provider = KokoroTTSProvider()
 stt_provider = QwenASRProvider()
@@ -82,7 +93,6 @@ async def stream_audio_chunks(query: str, asset_id: str, voice: str, thread_id: 
     """Converts buffered agent text chunks into PCM audio bytes via Kokoro TTS."""
     synth_fn = getattr(tts_provider, "synthesize_stream_bytes", getattr(tts_provider, "synthesize", None))
     async for sentence in stream_graph_sentences(query, asset_id, thread_id):
-        # Strip markdown syntax symbols and bracketed citations for vocalization
         clean_text = re.sub(r"\[\d+(?:-\d+)?\]", "", sentence)
         clean_text = re.sub(r"[*#_`]", "", clean_text).strip()
         if clean_text and synth_fn:
@@ -102,7 +112,7 @@ async def agent_text_endpoint(req: AgentQueryRequest):
 
 @app.post("/agent/stream-audio")
 async def agent_audio_endpoint(req: AgentQueryRequest):
-    """Text-to-Speech: Streams audio directly from text input through the agent."""
+    """Streams synthesized PCM audio directly from text input."""
     return StreamingResponse(
         stream_audio_chunks(req.query, req.asset_id, req.voice, req.thread_id),
         media_type="audio/pcm",
@@ -136,12 +146,7 @@ async def speech_to_speech_endpoint(
     voice: str = Form("af_heart"),
     thread_id: str = Form("voice_session"),
 ):
-    """
-    End-to-End Voice Pipeline:
-    1. Transcribes incoming WAV/MP3 via Qwen3-ASR
-    2. Runs query through LangGraph Agent (RAG on Qdrant)
-    3. Streams back synthesized Kokoro TTS audio bytes
-    """
+    """End-to-End Voice Pipeline via HTTP multipart upload."""
     suffix = f".{file.filename.split('.')[-1]}" if "." in (file.filename or "") else ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(await file.read())
@@ -153,19 +158,12 @@ async def speech_to_speech_endpoint(
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-    # Extract clean text whether output is string or dict
-    if isinstance(transcription, dict):
-        transcribed_text = transcription.get("text", "")
-    else:
-        transcribed_text = str(transcription or "")
-
+    transcribed_text = transcription.get("text", "") if isinstance(transcription, dict) else str(transcription or "")
     transcribed_text = transcribed_text.strip()
     if not transcribed_text:
         raise HTTPException(status_code=400, detail="No speech detected in audio file.")
 
-    # URL-encode header value to comply with Latin-1 HTTP header specifications
     safe_header_text = urllib.parse.quote(transcribed_text)
-
     return StreamingResponse(
         stream_audio_chunks(
             query=transcribed_text,
@@ -176,28 +174,41 @@ async def speech_to_speech_endpoint(
         media_type="audio/pcm",
         headers={"X-Transcribed-Text": safe_header_text},
     )
-    
-    
 
 
 @app.websocket("/ws/converse")
 async def converse_ws(ws: WebSocket):
+    """Full-duplex WebSocket for realtime speech-to-speech and text chat."""
     await ws.accept()
+    synth_fn = getattr(tts_provider, "synthesize_stream_bytes", getattr(tts_provider, "synthesize", None))
+
     try:
         while True:
             msg = await ws.receive_json()
 
-            if msg["type"] == "audio":
+            if msg.get("type") == "audio":
+                import base64
                 wav_bytes = base64.b64decode(msg["data"])
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                     tmp.write(wav_bytes)
                     tmp_path = tmp.name
-                transcript = await asyncio.to_thread(stt_provider.transcribe, tmp_path)
-                os.remove(tmp_path)
-                query = transcript if isinstance(transcript, str) else transcript.get("text", "")
+
+                try:
+                    transcription = await asyncio.to_thread(stt_provider.transcribe, tmp_path)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+                query = transcription.get("text", "") if isinstance(transcription, dict) else str(transcription or "")
+                query = query.strip()
                 await ws.send_json({"type": "transcript", "data": query})
+
+                if not query:
+                    await ws.send_json({"type": "text_chunk", "data": "No speech detected. Please try again.\n"})
+                    await ws.send_json({"type": "done"})
+                    continue
             else:
-                query = msg["data"]
+                query = msg.get("data", "").strip()
 
             asset_id = msg.get("asset_id", "22")
             thread_id = msg.get("thread_id", "default_session")
@@ -207,17 +218,26 @@ async def converse_ws(ws: WebSocket):
                 await ws.send_json({"type": "text_chunk", "data": sentence})
                 clean = re.sub(r"\[\d+(?:-\d+)?\]", "", sentence)
                 clean = re.sub(r"[*#_`]", "", clean).strip()
-                if clean:
-                    pcm = await asyncio.to_thread(tts_provider.synthesize_stream_bytes, clean, voice)
-                    wav = pcm_to_wav_bytes(pcm)
-                    await ws.send_json({"type": "audio_chunk", "data": base64.b64encode(wav).decode()})
+
+                if clean and synth_fn:
+                    pcm = await asyncio.to_thread(synth_fn, clean, voice)
+                    if pcm:
+                        wav = pcm_to_wav_bytes(pcm)
+                        import base64
+                        await ws.send_json({"type": "audio_chunk", "data": base64.b64encode(wav).decode()})
 
             await ws.send_json({"type": "done"})
     except WebSocketDisconnect:
         pass
-    
-    
-    
-app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
 
-    
+
+@app.get("/")
+async def serve_index():
+    index_file = FRONTEND_DIR / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(status_code=404, detail=f"index.html not found in {FRONTEND_DIR}")
+    return FileResponse(index_file)
+
+
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+
