@@ -16,6 +16,8 @@ from src.tts.kokoro_provider import KokoroTTSProvider
 from src.stt.qwen_asr_provider import QwenASRProvider
 from src.tts.wav_utils import pcm_to_wav_bytes
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(title="LangGraph Voice Agent - Speech-to-Speech Streaming")
 
 # Lazy/cached initialization of pipeline components
@@ -214,4 +216,8 @@ async def converse_ws(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     
+    
+    
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
+
     

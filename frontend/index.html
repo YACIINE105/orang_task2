@@ -1,42 +1,123 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Voice Agent</title>
-<link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LangGraph AI Voice & Chat Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app">
-    <header class="topbar">
+  <div class="app-container">
+    <!-- Header -->
+    <header class="top-nav">
       <div class="brand">
-        <span class="dot" id="statusDot"></span>
-        <h1>LangGraph Voice Agent</h1>
+        <span class="brand-icon">⚡</span>
+        <div>
+          <h1>Voice Agent</h1>
+          <span class="status-indicator" id="connection-status">
+            <span class="status-dot"></span> <span id="status-text">Ready</span>
+          </span>
+        </div>
       </div>
-      <div class="settings">
-        <label>Voice
-          <select id="voiceSelect">
-            <option value="af_heart">af_heart</option>
-            <option value="af_bella">af_bella</option>
-            <option value="am_adam">am_adam</option>
-          </select>
-        </label>
+
+      <!-- Mode Selector Tabs -->
+      <nav class="mode-tabs">
+        <button class="mode-btn active" data-mode="chat">
+          <span class="icon">💬</span>
+          <span>Chat Only</span>
+        </button>
+        <button class="mode-btn" data-mode="s2s">
+          <span class="icon">🎙️</span>
+          <span>Speech-to-Speech</span>
+        </button>
+        <button class="mode-btn" data-mode="stt">
+          <span class="icon">📝</span>
+          <span>Audio to Text</span>
+        </button>
+      </nav>
+
+      <div class="header-actions">
+        <button id="toggle-settings-btn" class="icon-btn" title="Agent Settings">⚙️</button>
+        <button id="new-chat-btn" class="btn btn-secondary" title="Start new session">New Chat</button>
       </div>
     </header>
 
-    <main class="chat" id="chat"></main>
+    <!-- Configuration Drawer -->
+    <div id="settings-panel" class="settings-drawer hidden">
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label for="voice-select">TTS Voice</label>
+          <select id="voice-select">
+            <option value="af_heart" selected>af_heart (Female)</option>
+            <option value="af_bella">af_bella (Female)</option>
+            <option value="am_adam">am_adam (Male)</option>
+            <option value="am_michael">am_michael (Male)</option>
+            <option value="bf_emma">bf_emma (British Female)</option>
+            <option value="bm_george">bm_george (British Male)</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label for="asset-id-input">Asset ID</label>
+          <input type="text" id="asset-id-input" value="22">
+        </div>
+        <div class="setting-item">
+          <label for="thread-id-input">Thread ID</label>
+          <input type="text" id="thread-id-input" value="session_01">
+        </div>
+      </div>
+    </div>
 
-    <footer class="composer">
-      <button id="micBtn" class="mic-btn" title="Hold to talk">
-        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
-      </button>
-      <input id="textInput" type="text" placeholder="Type a message or hold the mic to speak..." />
-      <button id="sendBtn" class="send-btn">Send</button>
+    <!-- Chat Messages Viewport -->
+    <main class="chat-viewport">
+      <div id="chat-messages" class="messages-container">
+        <div class="message system">
+          <div class="bubble">
+            <strong>Agent initialized.</strong> Choose a mode above to start text chatting, speaking continuously, or dictating speech to text.
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Recording Banner Overlay -->
+    <div id="recording-bar" class="recording-bar hidden">
+      <div class="pulse-ring"></div>
+      <div class="recording-details">
+        <span class="rec-icon">🔴</span>
+        <span id="recording-timer">00:00</span>
+        <span id="recording-mode-label">Recording voice...</span>
+      </div>
+      <button id="cancel-rec-btn" class="btn btn-text">Cancel</button>
+    </div>
+
+    <!-- Input Bar -->
+    <footer class="input-panel">
+      <div class="input-wrapper">
+        <textarea
+          id="user-input"
+          placeholder="Ask a question..."
+          rows="1"
+        ></textarea>
+
+        <div class="input-controls">
+          <button id="mic-btn" class="icon-btn action-mic" title="Record microphone input">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+          </button>
+
+          <button id="send-btn" class="icon-btn action-send" title="Send message">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="mode-hint" id="mode-hint">Chat mode: press Enter to send, Shift+Enter for new line.</div>
     </footer>
-  </div>
-
-  <div id="recIndicator" class="rec-indicator hidden">
-    <span class="pulse"></span> Recording... release to send
   </div>
 
   <script src="app.js"></script>
