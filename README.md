@@ -1,79 +1,35 @@
-# Trial website exposure with Cloudflare Tunnel
+# Multi-Agent Travel Planner
 
-This project serves the frontend and API from the FastAPI app at http://localhost:8000.
+This project builds a travel plan through collaborating specialized agents and automatically saves the final plan as a Markdown report.
 
-## 1) Start the app locally
+## Agents
 
-From the project root:
+1. Destination Agent selects places and activities for each interest.
+2. Budget Agent estimates accommodation, food, transportation, activities, and a buffer.
+3. Itinerary Agent creates a day-by-day schedule from the destination and budget outputs.
+4. Recommendation Agent reviews the collected plan and adds practical recommendations.
+5. Evaluator Agent checks that the plan has a valid budget, duration, and covered interests.
 
-```bash
-source .venv/bin/activate
-uvicorn src.api_graph_stream:app --host 0.0.0.0 --port 8000
-```
+The agents run in order through a LangGraph state graph. The automation node receives the composed final plan and writes it to `reports/travel_plan_<timestamp>.md`.
 
-The app should be reachable at:
-
-- http://localhost:8000/
-
-## 2) Create the Cloudflare tunnel
-
-In the Cloudflare dashboard:
-
-1. Open Zero Trust > Networks > Tunnels.
-2. Click Create a tunnel.
-3. Choose Docker and copy the generated token.
-4. Save the token in a local file:
+## Run
 
 ```bash
-cp docker/env/.env.cloudflare.example docker/env/.env.cloudflare
+uv sync
+uv run python -m src.main_graph \
+  --destination Lisbon \
+  --budget 1200 \
+  --interests culture,food,nature \
+  --days 3 \
+  --currency EUR
 ```
 
-Then edit the copied file and replace the sample token with the real one:
+The command prints the complete plan and the automated save result.
 
-```bash
-nano docker/env/.env.cloudflare
-```
+## Input
 
-## 3) Start the tunnel
-
-From the project root:
-
-```bash
-docker compose -f docker/docker-compose.yml up -d cloudflared
-```
-
-## 4) Configure the public hostname in Cloudflare
-
-In the Cloudflare Tunnel screen:
-
-1. Click Add a public hostname.
-2. Set the domain or subdomain you own, for example:
-   - trial.example.com
-3. Choose the service type: HTTP
-4. Set the URL to:
-   - http://localhost:8000
-5. Save it.
-
-Your app will then be available through the Cloudflare URL.
-
-## 5) Important notes
-
-- The Cloudflare tunnel runs from your machine, so your laptop must stay online while the trial is active.
-- If you need the app to run in the background, use a machine that stays on or a server VM.
-- If you need a password-free public trial link, you can also set Cloudflare Access rules later, but that is optional for a basic trial.
-
-## 6) Useful commands
-
-```bash
-# Start the database services
-
-docker compose -f docker/docker-compose.yml up -d mongo qdrant
-
-# Start the app
-source .venv/bin/activate
-uvicorn src.api_graph_stream:app --host 0.0.0.0 --port 8000
-
-# Check tunnel status
-
-docker logs -f cloudflared
-```
+- `--destination`: destination name.
+- `--budget`: total budget as a non-negative number.
+- `--interests`: comma-separated interests.
+- `--days`: positive number of available days.
+- `--currency`: currency label, defaulting to `USD`.

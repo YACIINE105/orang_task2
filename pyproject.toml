@@ -1,31 +1,15 @@
 [project]
-name = "task2"
+name = "travel-planner"
 version = "0.1.0"
-description = "Add your description here"
+description = "Multi-agent travel planning system with automated report saving"
 readme = "README.md"
 authors = [
     { name = "YACIINE 105", email = "mooml.intern@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = [
-    "kokoro>=0.9.4",
-    "langchain-community>=0.4.2",
-    "langchain-openai>=1.6.2",
-    "langgraph>=1.2.11",
-    "openpyxl",
-    "pandas",
-    "pymongo>=4.18.1",
-    "pymupdf>=1.28.2",
-    "python-dotenv>=1.2.3",
-    "qdrant-client>=1.19.0",
-    "qwen-asr>=0.0.6",
-    "soundfile>=0.14.0",
-    "torch>=2.14.0",
-]
+dependencies = ["langgraph>=1.2.11"]
 
 
 [tool.uv]
 package = false
 
-[[tool.uv.index]]
-url = "https://download.pytorch.org/whl/cpu"
