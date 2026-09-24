@@ -33,21 +33,6 @@ class DataBase:
         print(f"Stored {len(chunk_docs)} chunks for asset '{asset_id}'.")
         return result.inserted_ids
 
-    # ------------------------------------------------------------------
-    # Chat history (keyed by asset_id)
-    # ------------------------------------------------------------------
-    def save_chat_history(self, asset_id: str, history: list[dict]):
-        self.db["chat_history"].update_one(
-            {"asset_id": asset_id},
-            {"$set": {"history": history}},
-            upsert=True,
-        )
-
-    def get_chat_history(self, asset_id: str) -> list[dict]:
-        doc = self.db["chat_history"].find_one({"asset_id": asset_id})
-        return doc["history"] if doc else []
-
-
 if __name__ == "__main__":
     asset_id = input("Enter asset id: ").strip()
 
