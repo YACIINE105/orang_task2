@@ -29,20 +29,29 @@ class AgentNodes:
         
 
     def retrieve_docs_node(self, state: AgentState) -> dict:
-        ...  # -> {"doc_results": results}
-        query_vector = self.embeddings.embed_query(query=state["query"])
-        results = self.qdrant.search_embeddings(asset_id=state["asset_id"], query_vector=query_vector)
+        query = state["query"]
+        previous_context = self.provider.recent_conversation(
+            asset_id=state["asset_id"],
+            thread_id=state.get("thread_id"),
+            limit=4,
+        )
+        retrieval_query = f"{previous_context}\nCurrent question: {query}" if previous_context else query
+        query_vector = self.embeddings.embed_query(query=retrieval_query)
+        results = self.qdrant.search_embeddings(
+            asset_id=state["asset_id"],
+            query_vector=query_vector,
+            top_k=10,
+        )
         print(f"[retrieve_docs] {len(results)} chunks")
         return {"doc_results": results}
 
 
     def summarize_node(self, state: AgentState) -> dict:
-        
-        prompt = self.provider.prepare_query_for_agent(state["query"], summary=True)
         summary = self.provider.generate_text(
             asset_id=state["asset_id"],
-            query=prompt,
+            query=state["query"],
             search_results=state.get("doc_results", []),
+            thread_id=state.get("thread_id"),
         )
         print("[summarize] done")
         return {"summary": summary}
@@ -67,18 +76,8 @@ class AgentNodes:
         
 
     def answer_node(self, state: AgentState) -> dict:
-        answer = state.get("summary", "")
-
-        report_path = state.get("report_path")
-        email_status = state.get("email_status")
-
-        if report_path:
-            answer += f"\n\nReport saved: {report_path}"
-        if email_status:
-            answer += f"\n\nEmail: {email_status}"
-
         print("[answer] done")
-        return {"answer": answer}
-        
-        
+        return {"answer": state.get("summary", "")}
+
+
         

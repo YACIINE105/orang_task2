@@ -29,6 +29,16 @@ services:
       - backend
     restart: always
 
+  # Cloudflare Tunnel for exposing the app to a public trial URL
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    network_mode: host
+    env_file:
+      - ./env/.env.cloudflare
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+
 networks:
   backend:
     driver: bridge
