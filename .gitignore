@@ -1,3 +1,10 @@
+*.pcm
+*.xlsx
+*.log
+*.wav
+__pycache__/
+.venv/
+reports/travel_plan_*.md
 orange_task/
 __pycache__/
 *.pyc
